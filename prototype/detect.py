@@ -108,11 +108,14 @@ class ColorGrouper:
 
 class PuzzleDetector:
 
-    def __init__(self, template_dir, debug=False, debug_dir=None):
+    def __init__(self, template_dir, debug=False, debug_dir=None, scale=None):
         self.template_dir = Path(template_dir)
+        self.raw_templates = {}
         self.templates = {}
         self.debug = debug
         self.debug_dir = Path(debug_dir) if debug_dir else None
+        self.user_scale = float(scale) if scale is not None else None
+        self.scale = self.user_scale if self.user_scale is not None else 1.0
         self._load_templates()
 
     def _debug_save(self, name, img):
@@ -132,8 +135,60 @@ class PuzzleDetector:
                 img = cv2.imread(str(path))
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 key = name.replace('.png', '').replace('-', '_')
-                self.templates[key] = gray
+                self.raw_templates[key] = gray
                 print(f"[模板] {name}  {gray.shape}")
+
+    def _resize_template(self, tpl, scale):
+        h, w = tpl.shape
+        nh = max(1, int(round(h * scale)))
+        nw = max(1, int(round(w * scale)))
+        return cv2.resize(tpl, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+    def _build_scaled_templates(self, scale):
+        self.templates = {}
+        for key, tpl in self.raw_templates.items():
+            self.templates[key] = self._resize_template(tpl, scale)
+
+    def _scaled(self, value):
+        return max(1, int(round(value * self.scale)))
+
+    def _scaled_area(self, value):
+        return max(1, int(round(value * self.scale * self.scale)))
+
+    def _estimate_scale(self):
+        """多尺度模板匹配，实测当前截图中的 UI 缩放系数。"""
+        h, w = self.gray.shape
+        roi = self.gray[h // 6:5 * h // 6, w // 6:2 * w // 3]
+
+        candidates = np.arange(0.50, 2.001, 0.05)
+        best_scale = 1.0
+        best_score = -1.0
+
+        for scale in candidates:
+            scores = []
+            for key in ('tile_empty', 'tile_disable'):
+                tpl = self.raw_templates.get(key)
+                if tpl is None:
+                    continue
+                stpl = self._resize_template(tpl, float(scale))
+                th, tw = stpl.shape
+                rh, rw = roi.shape
+                if th >= rh or tw >= rw:
+                    continue
+                res = cv2.matchTemplate(roi, stpl, cv2.TM_CCOEFF_NORMED)
+                if res.size > 0:
+                    scores.append(float(res.max()))
+            if not scores:
+                continue
+            score = float(np.mean(scores))
+            if score > best_score:
+                best_score = score
+                best_scale = float(scale)
+
+        if best_score < 0:
+            raise ValueError("自动缩放探测失败：未找到可用模板匹配结果")
+
+        return best_scale
 
     # ─────────── 主流程 ───────────
 
@@ -144,6 +199,14 @@ class PuzzleDetector:
         self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
         self.hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
         self.color_grouper = ColorGrouper()
+
+        if self.user_scale is None:
+            self.scale = self._estimate_scale()
+            print(f"[缩放] 自动探测 scale={self.scale:.2f}")
+        else:
+            self.scale = self.user_scale
+            print(f"[缩放] 手动指定 scale={self.scale:.2f}")
+        self._build_scaled_templates(self.scale)
 
         print(f"\n[图像] {Path(image_path).name}  {self.image.shape[1]}×{self.image.shape[0]}")
 
@@ -162,6 +225,7 @@ class PuzzleDetector:
             print(f"  颜色{lbl}: HSV=({h},{s},{v})  采样{n}次")
 
         return {
+            'detected_scale': self.scale,
             'grid_size': grid['size'],
             'grid_origin_px': grid['origin'],
             'cell_size_px': grid['cell_size'],
@@ -198,7 +262,9 @@ class PuzzleDetector:
             raise ValueError("格子匹配数不足")
 
         all_pts = self._nms(all_pts, iou_thresh=0.5)
-        all_pts = [p for p in all_pts if 65 < p[2] < 100 and 65 < p[3] < 100]
+        min_wh = self._scaled(65)
+        max_wh = self._scaled(100)
+        all_pts = [p for p in all_pts if min_wh < p[2] < max_wh and min_wh < p[3] < max_wh]
         print(f"  NMS+过滤: {len(all_pts)}")
 
         # debug: 在图上标出所有匹配点
@@ -260,11 +326,13 @@ class PuzzleDetector:
         # 用排序后的相邻间距的中位数来估算格子尺寸
         xs = sorted(set(centers[:, 0]))
         ys = sorted(set(centers[:, 1]))
-        dxs = [xs[i + 1] - xs[i] for i in range(len(xs) - 1) if xs[i + 1] - xs[i] > 30]
-        dys = [ys[i + 1] - ys[i] for i in range(len(ys) - 1) if ys[i + 1] - ys[i] > 30]
+        min_gap = self._scaled(30)
+        dxs = [xs[i + 1] - xs[i] for i in range(len(xs) - 1) if xs[i + 1] - xs[i] > min_gap]
+        dys = [ys[i + 1] - ys[i] for i in range(len(ys) - 1) if ys[i + 1] - ys[i] > min_gap]
 
-        cell_w = int(np.median(dxs)) if dxs else 87
-        cell_h = int(np.median(dys)) if dys else 87
+        default_cell = self._scaled(87)
+        cell_w = int(np.median(dxs)) if dxs else default_cell
+        cell_h = int(np.median(dys)) if dys else default_cell
 
         min_cx, max_cx = int(centers[:, 0].min()), int(centers[:, 0].max())
         min_cy, max_cy = int(centers[:, 1].min()), int(centers[:, 1].max())
@@ -377,7 +445,7 @@ class PuzzleDetector:
         gw, gh = cw * cols, ch * rows
 
         # 搜索范围扩大到 150px，但 mask 用 sat+val 联合阈值排除暗色背景辉光
-        margin = 150
+        margin = self._scaled(150)
         col_roi = self.image[max(0, oy - margin):oy - 2, ox:ox + gw]
         col_debug = col_roi.copy() if self.debug else None
         col_reqs = self._find_bars(col_roi, 'col', ox, cw, cols,
@@ -441,7 +509,7 @@ class PuzzleDetector:
         reqs = [[] for _ in range(n_cells)]
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
-            if w * h < 15 or w * h > 800:
+            if w * h < self._scaled_area(15) or w * h > self._scaled_area(800):
                 continue
             # 需求条形状：不能太方也不能太细长
             aspect = max(w, h) / max(min(w, h), 1)
@@ -518,7 +586,7 @@ class PuzzleDetector:
             x, y, w, h = cv2.boundingRect(cnt)
             area = cv2.contourArea(cnt)
             # 过滤：面积适中，宽高合理（排除细长线条和噪点）
-            if area > 500 and 30 < w < 200 and 30 < h < 200:
+            if area > self._scaled_area(500) and self._scaled(30) < w < self._scaled(200) and self._scaled(30) < h < self._scaled(200):
                 aspect = max(w, h) / max(min(w, h), 1)
                 if aspect < 4:  # 不要太狭长
                     blobs.append((x + rx, y, w, h, area))
@@ -572,7 +640,7 @@ class PuzzleDetector:
 
         trimmed = blob_mask[r_start:r_end, c_start:c_end]
         th, tw = trimmed.shape
-        if th < 10 or tw < 10:
+        if th < self._scaled(10) or tw < self._scaled(10):
             return None
 
         # ── 2. 尝试不同网格尺寸，选择最清晰分离的 ──
@@ -589,9 +657,9 @@ class PuzzleDetector:
                 cell_w = tw / nc
 
                 # 格子尺寸不能太小也不能太大
-                if cell_h < 12 or cell_w < 12:
+                if cell_h < self._scaled(12) or cell_w < self._scaled(12):
                     continue
-                if cell_h > 45 or cell_w > 45:
+                if cell_h > self._scaled(45) or cell_w > self._scaled(45):
                     continue
 
                 shape = []
@@ -635,7 +703,7 @@ class PuzzleDetector:
 
         # ── 3. 提取颜色 ──
         px_mask = blob_mask.astype(bool)
-        if np.sum(px_mask) < 30:
+        if np.sum(px_mask) < self._scaled_area(30):
             return None
 
         px = blob_hsv[px_mask]
@@ -819,6 +887,8 @@ def main():
     parser = argparse.ArgumentParser(description="终末地源石电路模块解谜 - UI 识别原型")
     parser.add_argument("image", help="游戏截图路径")
     parser.add_argument("--debug", action="store_true", help="输出中间调试图像")
+    parser.add_argument("--scale", type=float, default=None,
+                        help="手动指定 UI 缩放系数（不指定则自动探测）")
     args = parser.parse_args()
 
     image_path = args.image
@@ -832,8 +902,12 @@ def main():
 
     debug_dir = output_dir / f"{stem}_debug" if args.debug else None
 
+    if args.scale is not None and args.scale <= 0:
+        print("错误: --scale 必须大于 0")
+        sys.exit(1)
+
     template_dir = Path(__file__).parent / "image" / "ui-template"
-    detector = PuzzleDetector(template_dir, debug=args.debug, debug_dir=debug_dir)
+    detector = PuzzleDetector(template_dir, debug=args.debug, debug_dir=debug_dir, scale=args.scale)
     result = detector.detect(image_path)
 
     def to_json(obj):
