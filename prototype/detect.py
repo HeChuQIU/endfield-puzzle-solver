@@ -96,6 +96,19 @@ class ColorGrouper:
             return chr(ord('A') + idx)
         return str(idx)
 
+    def match_nearest(self, h, s, v):
+        """匹配到已有 cluster 中 Hue 距离最近者，返回其 label；无 cluster 时临时 register"""
+        if not self.clusters:
+            return self.label(self.register(h, s, v))
+        best_idx = 0
+        best_dist = hue_distance(h, self.clusters[0][0])
+        for i, (ch, _, _, _) in enumerate(self.clusters):
+            d = hue_distance(h, ch)
+            if d < best_dist:
+                best_dist = d
+                best_idx = i
+        return self.label(best_idx)
+
     def color_hsv(self, idx):
         """返回组的平均 HSV"""
         if 0 <= idx < len(self.clusters):
@@ -211,9 +224,9 @@ class PuzzleDetector:
         print(f"\n[图像] {Path(image_path).name}  {self.image.shape[1]}×{self.image.shape[0]}")
 
         grid = self._detect_grid()
+        comps = self._detect_components(grid)
         tiles = self._classify_tiles(grid)
         reqs = self._detect_requirements(grid)
-        comps = self._detect_components()
 
         # 输出颜色组信息
         n_groups = len(self.color_grouper.clusters)
@@ -347,7 +360,7 @@ class PuzzleDetector:
     # ─────────── 2. 格子分类 ───────────
 
     def _classify_tiles(self, grid):
-        print("\n[2/4] 格子分类")
+        print("\n[3/4] 格子分类")
         rows, cols = grid['size']
         ox, oy = grid['origin']
         cw, ch = grid['cell_size']
@@ -391,11 +404,11 @@ class PuzzleDetector:
             avg_v = int(np.mean(px[:, 2]))
             # 真正的锁定格颜色明显：平均亮度应该 > 100
             if avg_v > 100 and avg_s > 100:
-                group_idx = self.color_grouper.register(avg_h, avg_s, avg_v)
+                grp = self.color_grouper.match_nearest(avg_h, avg_s, avg_v)
                 return {
                     'type': 'lock',
                     'color': [avg_h, avg_s, avg_v],
-                    'color_group': self.color_grouper.label(group_idx),
+                    'color_group': grp,
                 }
 
         # ── 2. 禁用格 vs 空格：竞争匹配，选得分更高的 ──
@@ -438,7 +451,7 @@ class PuzzleDetector:
     # ─────────── 3. 行列需求 ───────────
 
     def _detect_requirements(self, grid):
-        print("\n[3/4] 行列需求")
+        print("\n[4/4] 行列需求")
         ox, oy = grid['origin']
         cw, ch = grid['cell_size']
         rows, cols = grid['size']
@@ -450,152 +463,194 @@ class PuzzleDetector:
         col_debug = col_roi.copy() if self.debug else None
         col_reqs = self._find_bars(col_roi, 'col', ox, cw, cols,
                                     (ox, max(0, oy - margin)),
-                                    debug_img=col_debug)
+                                    debug_img=col_debug, debug_mask_key='col')
 
         row_roi = self.image[oy:oy + gh, max(0, ox - margin):ox - 2]
         row_debug = row_roi.copy() if self.debug else None
         row_reqs = self._find_bars(row_roi, 'row', oy, ch, rows,
                                     (max(0, ox - margin), oy),
-                                    debug_img=row_debug)
+                                    debug_img=row_debug, debug_mask_key='row')
 
         ct = sum(len(c) for c in col_reqs)
         rt = sum(len(r) for r in row_reqs)
         print(f"  列: {cols}组 共{ct}条  行: {rows}组 共{rt}条")
 
-        # debug: 标注后的 ROI（绿=filled, 红=unfilled）+ Otsu mask
+        # debug: 标注后的 ROI（绿=filled, 红=unfilled）；sim_mask 由 _find_bars 保存
         if self.debug:
             if col_debug is not None and col_debug.size > 0:
                 self._debug_save("3_col_bars.png", col_debug)
-                col_hsv = cv2.cvtColor(col_roi, cv2.COLOR_BGR2HSV)
-                _, col_otsu = cv2.threshold(col_hsv[:, :, 1], 0, 255,
-                                            cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                self._debug_save("3_col_otsu_mask.png", col_otsu)
             if row_debug is not None and row_debug.size > 0:
                 self._debug_save("3_row_bars.png", row_debug)
-                row_hsv = cv2.cvtColor(row_roi, cv2.COLOR_BGR2HSV)
-                _, row_otsu = cv2.threshold(row_hsv[:, :, 1], 0, 255,
-                                            cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                self._debug_save("3_row_otsu_mask.png", row_otsu)
 
         return {'columns': col_reqs, 'rows': row_reqs}
 
+    def _similarity_map_for_color(self, hsv, ch, cs, cv, hue_width=10, min_sat=50, min_val=55):
+        """按元件颜色生成相似度图：越接近元件色越接近 1"""
+        h_arr = hsv[:, :, 0].astype(np.float32)
+        s_arr = hsv[:, :, 1].astype(np.float32)
+        v_arr = hsv[:, :, 2].astype(np.float32)
+        d = np.abs(h_arr - ch)
+        d = np.minimum(d, 180 - d)
+        hue_sim = np.maximum(0.0, 1.0 - d / hue_width)
+        valid = (s_arr >= min_sat) & (v_arr >= min_val)
+        return np.where(valid, hue_sim, 0.0).astype(np.float32)
+
     def _find_bars(self, roi_bgr, orient, grid_start, cell_sz, n_cells, region_off,
-                   debug_img=None):
+                   debug_img=None, debug_mask_key=None):
         if roi_bgr.size == 0:
             return [[] for _ in range(n_cells)]
 
         hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
-        sat = hsv[:, :, 1]
-        val = hsv[:, :, 2]
-
-        # ── 自适应前景分离（替代固定阈值）──
-        # Otsu 在饱和度通道自动分离彩色前景（bars）和模糊背景
-        otsu_thresh, sat_binary = cv2.threshold(sat, 0, 255,
-                                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        mask = (sat_binary > 0).astype(np.uint8)
-
-        # 安全检查：Otsu 前景过多说明分布不够双峰，用百分位回退
-        fg_ratio = np.sum(mask) / mask.size
-        if fg_ratio > 0.25:
-            otsu_thresh = float(np.percentile(sat, 96))
-            mask = (sat > otsu_thresh).astype(np.uint8)
-
-        # 背景亮度基准：用 mask 外的像素中位数
-        bg_pixels = val[mask == 0]
-        bg_val = float(np.median(bg_pixels)) if bg_pixels.size > 100 else 0.0
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
         reqs = [[] for _ in range(n_cells)]
-        for cnt in contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            if w * h < self._scaled_area(15) or w * h > self._scaled_area(800):
-                continue
-            # 需求条形状：不能太方也不能太细长
-            aspect = max(w, h) / max(min(w, h), 1)
-            if aspect > 6:
-                continue
 
-            # 颜色提取：用 mask 内的像素（与检测一致）
-            bar_mask = mask[y:y + h, x:x + w]
-            bar_hsv = hsv[y:y + h, x:x + w]
-            bar_val = bar_hsv[:, :, 2]
-            color_pixels = bar_hsv[bar_mask > 0]
-            if len(color_pixels) < 5:
+        # 无元件颜色时返回空
+        if not self.color_grouper.clusters:
+            return reqs
+
+        # 按每种元件颜色分别计算相似度图并检测
+        combined_mask = None
+        for ci, (ch, cs, cv, _) in enumerate(self.color_grouper.clusters):
+            grp = self.color_grouper.label(ci)
+            sim_map = self._similarity_map_for_color(hsv, ch, cs, cv)
+            sim_u8 = (np.clip(sim_map, 0, 1) * 255).astype(np.uint8)
+            _, mask = cv2.threshold(sim_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            if np.sum(mask > 0) < 10:
                 continue
-
-            avg_h = int(np.mean(color_pixels[:, 0]))
-            avg_s = int(np.mean(color_pixels[:, 1]))
-            avg_v = int(np.mean(color_pixels[:, 2]))
-
-            # ── filled 判断：亮度变异系数（完全自适应，无绝对阈值）──
-            # 实心条：内部亮度均匀 → CV 低 (< 0.35)
-            # 空心条：边框亮 + 中心暗 → CV 高 (> 0.4)
-            bh, bw = bar_val.shape
-            val_cv = 0.0
-            if bh >= 5 and bw >= 5:
-                bar_val_f = bar_val.astype(float)
-                val_cv = float(np.std(bar_val_f) / max(np.mean(bar_val_f), 1))
-                filled = val_cv < 0.35
+            if combined_mask is None:
+                combined_mask = mask.copy()
             else:
-                filled = False
+                combined_mask = np.maximum(combined_mask, mask)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            group_idx = self.color_grouper.register(avg_h, avg_s, avg_v)
+            for cnt in contours:
+                x, y, w, h = cv2.boundingRect(cnt)
+                if w * h < self._scaled_area(15) or w * h > self._scaled_area(800):
+                    continue
+                aspect = max(w, h) / max(min(w, h), 1)
+                if aspect > 6:
+                    continue
 
-            if orient == 'col':
-                cx = region_off[0] + x + w // 2
-                idx = int(round((cx - grid_start - cell_sz / 2) / cell_sz))
-            else:
-                cy = region_off[1] + y + h // 2
-                idx = int(round((cy - grid_start - cell_sz / 2) / cell_sz))
+                bar_mask = mask[y:y + h, x:x + w]
+                bar_hsv = hsv[y:y + h, x:x + w]
+                bar_val = bar_hsv[:, :, 2]
+                color_pixels = bar_hsv[bar_mask > 0]
+                if len(color_pixels) < 5:
+                    continue
 
-            if 0 <= idx < n_cells:
-                reqs[idx].append({
-                    'color': [avg_h, avg_s, avg_v],
-                    'color_group': self.color_grouper.label(group_idx),
-                    'filled': filled,
-                })
+                avg_h = int(np.mean(color_pixels[:, 0]))
+                avg_s = int(np.mean(color_pixels[:, 1]))
+                avg_v = int(np.mean(color_pixels[:, 2]))
 
-            # debug: 在 ROI 图上标注每个 bar
-            if debug_img is not None:
-                color = (0, 255, 0) if filled else (0, 0, 255)
-                cv2.rectangle(debug_img, (x, y), (x + w, y + h), color, 2)
-                label = f"cv{val_cv:.2f}"
-                cv2.putText(debug_img, label, (x, y - 3),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+                bh, bw = bar_val.shape
+                val_cv = 0.0
+                if bh >= 5 and bw >= 5:
+                    bar_val_f = bar_val.astype(float)
+                    val_cv = float(np.std(bar_val_f) / max(np.mean(bar_val_f), 1))
+                    filled = val_cv < 0.35
+                else:
+                    filled = False
+
+                if orient == 'col':
+                    cx = region_off[0] + x + w // 2
+                    idx = int(round((cx - grid_start - cell_sz / 2) / cell_sz))
+                else:
+                    cy = region_off[1] + y + h // 2
+                    idx = int(round((cy - grid_start - cell_sz / 2) / cell_sz))
+
+                if 0 <= idx < n_cells:
+                    reqs[idx].append({
+                        'color': [avg_h, avg_s, avg_v],
+                        'color_group': grp,
+                        'filled': filled,
+                    })
+
+                if debug_img is not None:
+                    color = (0, 255, 0) if filled else (0, 0, 255)
+                    cv2.rectangle(debug_img, (x, y), (x + w, y + h), color, 2)
+                    cv2.putText(debug_img, f"{grp} cv{val_cv:.2f}", (x, y - 3),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+
+        if debug_mask_key and combined_mask is not None and self.debug and self.debug_dir:
+            self._debug_save(f"3_{debug_mask_key}_sim_mask.png", combined_mask)
 
         return reqs
 
     # ─────────── 4. 元件检测 ───────────
 
-    def _detect_components(self):
-        print("\n[4/4] 元件检测")
-        ih, iw = self.image.shape[:2]
-        rx = 3 * iw // 5
-        r_hsv = self.hsv[:, rx:]
+    def _detect_components_by_template(self, roi_gray, rx, y_limit):
+        """使用 component_flame 模板匹配定位元件卡片边框"""
+        raw_tpl = self.raw_templates.get('component_flame')
+        if raw_tpl is None:
+            return []
+        rh, rw = roi_gray.shape
+        best_pts = []
+        best_n = 0
+        for comp_scale in [0.5, 0.6, 0.7, 0.8, 1.0]:
+            tpl = self._resize_template(raw_tpl, comp_scale * self.scale)
+            th, tw = tpl.shape
+            if th >= rh or tw >= rw:
+                continue
+            res = cv2.matchTemplate(roi_gray, tpl, cv2.TM_CCOEFF_NORMED)
+            max_score = float(res.max()) if res.size else 0
+            thresh = max(0.55, min(0.75, max_score - 0.05))
+            pts = self._match_template(roi_gray, tpl, thresh=thresh)
+            pts = [(x + rx, y, tw, th, float(s)) for x, y, _, _, s in pts]
+            pts = [p for p in pts if p[1] < y_limit]  # 排除底部 UI
+            pts = self._nms(pts, iou_thresh=0.5)
+            min_wh = self._scaled(45)
+            max_wh = self._scaled(130)
+            pts = [p for p in pts if min_wh < p[2] < max_wh and min_wh < p[3] < max_wh]
+            if len(pts) > best_n and 1 <= len(pts) <= 8:
+                best_n = len(pts)
+                best_pts = pts
+        if not best_pts:
+            return []
+        return [(x, y, w, h, w * h) for x, y, w, h, _ in best_pts]
 
-        # 原始 mask：高饱和+高亮度
+    def _detect_components_by_blob(self, r_hsv, rx, y_limit):
+        """原有 HSV blob 检测（兜底），排除 y >= y_limit 的底部 UI"""
         raw_mask = ((r_hsv[:, :, 1] > 60) & (r_hsv[:, :, 2] > 60)).astype(np.uint8)
-
-        # 找连通域（每个元件是一个大 blob）
         contours, _ = cv2.findContours(raw_mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
-
         blobs = []
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
+            if y >= y_limit:
+                continue  # 排除底部 UI（机器人、修门等）
             area = cv2.contourArea(cnt)
-            # 过滤：面积适中，宽高合理（排除细长线条和噪点）
             if area > self._scaled_area(500) and self._scaled(30) < w < self._scaled(200) and self._scaled(30) < h < self._scaled(200):
                 aspect = max(w, h) / max(min(w, h), 1)
-                if aspect < 4:  # 不要太狭长
+                if aspect < 4:
                     blobs.append((x + rx, y, w, h, area))
+        return blobs
+
+    def _detect_components(self, grid):
+        print("\n[2/4] 元件检测")
+        ih, iw = self.image.shape[:2]
+        rx = 3 * iw // 5
+        roi_gray = self.gray[:, rx:]
+        r_hsv = self.hsv[:, rx:]
+
+        # 元件区 y 轴上限：排除底部 UI（机器人、修门等）
+        ox, oy = grid['origin']
+        rows, cols = grid['size']
+        cw, ch = grid['cell_size']
+        grid_bottom = oy + rows * ch
+        y_limit = grid_bottom + self._scaled(150)
+
+        # 优先使用 component_flame 模板匹配（元件卡片边框）
+        blobs = self._detect_components_by_template(roi_gray, rx, y_limit)
+        if len(blobs) < 1:
+            # 兜底：原有 HSV blob 检测
+            blobs = self._detect_components_by_blob(r_hsv, rx, y_limit)
+            print(f"  模板匹配无结果，回退 blob 检测: {len(blobs)}")
 
         blobs.sort(key=lambda b: (b[1], b[0]))
         print(f"  元件 blob: {len(blobs)}")
 
         # debug: 右侧区域 mask 和检测到的 blob
         if self.debug:
+            raw_mask = ((r_hsv[:, :, 1] > 60) & (r_hsv[:, :, 2] > 60)).astype(np.uint8)
             self._debug_save("4_comp_mask.png", raw_mask * 255)
             dbg = self.image.copy()
             for x, y, w, h, area in blobs:

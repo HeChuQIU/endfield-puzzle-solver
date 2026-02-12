@@ -15,6 +15,12 @@ ENV/
 *.swp
 *.swo
 *~
+*.sln.DotSettings.user
+*.DotSettings.user
+
+# .NET
+**/bin/
+**/obj/
 
 # Output files
 prototype/image/output/

@@ -1,0 +1,50 @@
+    <Window
+    x:Class="EndfieldPuzzleSolver.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="终末地源石电路解谜器">
+
+    <Grid x:Name="RootGrid" AllowDrop="True" Background="Transparent"
+          DragOver="BoardDropArea_DragOver" Drop="BoardDropArea_Drop">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <CommandBar Grid.Row="0" DefaultLabelPosition="Right">
+            <AppBarButton x:Name="OpenScreenshotBtn" Icon="OpenFile" Label="打开截图" />
+            <AppBarButton x:Name="SolveBtn" Icon="Play" Label="求解" />
+            <AppBarSeparator />
+            <AppBarButton x:Name="PrevStepBtn" Icon="Back" Label="上一步" />
+            <AppBarButton x:Name="NextStepBtn" Icon="Forward" Label="下一步" />
+            <AppBarElementContainer>
+                <TextBlock x:Name="StepTextBlock" Text="步骤 0 / 0" VerticalAlignment="Center" Margin="12,0,0,0" />
+            </AppBarElementContainer>
+        </CommandBar>
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Margin="8">
+                <Canvas x:Name="BoardCanvas" />
+            </Border>
+            <Border Grid.Column="1" Width="300" Padding="16">
+                <ScrollViewer>
+                    <StackPanel>
+                        <TextBlock Text="谜题信息" FontWeight="SemiBold" FontSize="16" />
+                        <StackPanel x:Name="PuzzleInfoPanel">
+                            <TextBlock x:Name="GridSizeText" Text="网格大小: - × -" />
+                            <TextBlock Text="颜色组:" FontWeight="SemiBold" />
+                            <ItemsControl x:Name="ColorGroupsItems" />
+                        </StackPanel>
+                        <TextBlock x:Name="PlaceholderText" Text="请打开截图或拖入图片加载谜题" TextWrapping="Wrap" />
+                        <TextBlock Text="元件列表" FontWeight="SemiBold" FontSize="16" Margin="0,8,0,0" />
+                        <ItemsControl x:Name="ComponentsItems" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+        <InfoBar Grid.Row="2" x:Name="StatusInfoBar" Message="就绪" IsOpen="True" IsClosable="False" />
+    </Grid>
+</Window>
