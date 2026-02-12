@@ -7,7 +7,7 @@ namespace EndfieldPuzzleSolver.Recognition;
 public sealed class ColorGrouper
 {
     /// <summary>Hue 差值小于此阈值视为同组</summary>
-    public const int HueMergeDist = 18;
+    public int HueMergeDist { get; } = 18;
 
     private readonly List<Cluster> _clusters = [];
 
@@ -18,6 +18,9 @@ public sealed class ColorGrouper
         public int AvgV;
         public readonly List<(int H, int S, int V)> Samples = [];
     }
+
+    public ColorGrouper() { }
+    public ColorGrouper(int hueMergeDist) => HueMergeDist = hueMergeDist;
 
     /// <summary>注册一个颜色，返回其所属组的索引</summary>
     public int Register(int h, int s, int v)
@@ -71,6 +74,26 @@ public sealed class ColorGrouper
     }
 
     public int ClusterCount => _clusters.Count;
+
+    /// <summary>匹配到已有 cluster 中 Hue 距离最近者，返回其 label；无 cluster 时临时 register</summary>
+    public string MatchNearest(int h, int s, int v)
+    {
+        if (_clusters.Count == 0)
+            return Label(Register(h, s, v));
+
+        int bestIdx = 0;
+        int bestDist = HueDistance(h, _clusters[0].CenterHue);
+        for (int i = 1; i < _clusters.Count; i++)
+        {
+            int d = HueDistance(h, _clusters[i].CenterHue);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                bestIdx = i;
+            }
+        }
+        return Label(bestIdx);
+    }
 
     /// <summary>返回组的采样次数</summary>
     public int GetSampleCount(int idx)

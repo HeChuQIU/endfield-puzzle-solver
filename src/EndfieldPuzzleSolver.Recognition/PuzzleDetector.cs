@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using OpenCvSharp;
 using EndfieldPuzzleSolver.Recognition.Models;
+using EndfieldPuzzleSolver.Recognition.Config;
 
 namespace EndfieldPuzzleSolver.Recognition;
 
@@ -18,6 +19,7 @@ public sealed class PuzzleDetector
     private readonly bool _debug;
     private readonly string? _debugDir;
     private readonly double? _userScale;
+    private readonly DetectionConfig _config;
 
     private Mat _image = null!;
     private Mat _gray = null!;
@@ -25,9 +27,10 @@ public sealed class PuzzleDetector
     private ColorGrouper _colorGrouper = null!;
     private double _scale = 1.0;
 
-    public PuzzleDetector(string templateDir, bool debug = false, string? debugDir = null, double? scale = null)
+    public PuzzleDetector(string templateDir, DetectionConfig config, bool debug = false, string? debugDir = null, double? scale = null)
     {
         _templateDir = templateDir;
+        _config = config;
         _debug = debug;
         _debugDir = debugDir;
         _userScale = scale;
@@ -88,12 +91,18 @@ public sealed class PuzzleDetector
     {
         var h = _gray.Rows;
         var w = _gray.Cols;
-        var roi = _gray[new Rect(w / 6, h / 6, 2 * w / 3 - w / 6, 5 * h / 6 - h / 6)];
+        var roi = _gray[new Rect(
+            (int)(w * _config.AutoScaling.RoiHorizontalRatio[0]),
+            (int)(h * _config.AutoScaling.RoiVerticalRatio[0]),
+            (int)(w * _config.AutoScaling.RoiHorizontalRatio[1] - w * _config.AutoScaling.RoiHorizontalRatio[0]),
+            (int)(h * _config.AutoScaling.RoiVerticalRatio[1] - h * _config.AutoScaling.RoiVerticalRatio[0]))];
 
         double bestScale = 1.0;
         double bestScore = -1.0;
+        var stepSize = _config.AutoScaling.StepSize;
+        var searchRange = _config.AutoScaling.SearchRange;
 
-        for (var s = 0.50; s <= 2.001; s += 0.05)
+        for (var s = searchRange[0]; s <= searchRange[1] + 0.001; s += stepSize)
         {
             var scores = new List<double>();
             foreach (var key in new[] { "tile_empty", "tile_disable" })
@@ -156,7 +165,7 @@ public sealed class PuzzleDetector
         _hsv = new Mat();
         Cv2.CvtColor(_image, _gray, ColorConversionCodes.BGR2GRAY);
         Cv2.CvtColor(_image, _hsv, ColorConversionCodes.BGR2HSV);
-        _colorGrouper = new ColorGrouper();
+        _colorGrouper = new ColorGrouper(_config.ColorGrouping.HueMergeDistance);
 
         var estimatedScale = _userScale ?? EstimateScale();
         if (estimatedScale == null)
@@ -169,9 +178,14 @@ public sealed class PuzzleDetector
             return DetectResult.Fail("格子匹配数不足：无法识别棋盘网格（可能不是有效的谜题截图）");
 
         var g = grid.Value;
+        // 计算网格底部用于组件检测的 y 限制
+        var ih = _image.Rows;
+        var gridBottom = g.OriginY + g.Rows * g.CellH;
+        var yLimit = Math.Min(ih, gridBottom + Scaled(_config.ComponentDetection.YLimitOffset));
+
+        var comps = DetectComponents(yLimit);
         var tiles = ClassifyTiles(g);
         var reqs = DetectRequirements(g);
-        var comps = DetectComponents();
 
         var colorGroups = new List<ColorGroupInfo>();
         for (int i = 0; i < _colorGrouper.ClusterCount; i++)
@@ -196,16 +210,28 @@ public sealed class PuzzleDetector
     {
         var h = _gray.Rows;
         var w = _gray.Cols;
-        var roi = _gray[new Rect(w / 6, h / 6, 2 * w / 3 - w / 6, 5 * h / 6 - h / 6)];
-        var oxOff = w / 6;
-        var oyOff = h / 6;
+        var roi = _gray[new Rect(
+            (int)(w * _config.AutoScaling.RoiHorizontalRatio[0]),
+            (int)(h * _config.AutoScaling.RoiVerticalRatio[0]),
+            (int)(w * _config.AutoScaling.RoiHorizontalRatio[1] - w * _config.AutoScaling.RoiHorizontalRatio[0]),
+            (int)(h * _config.AutoScaling.RoiVerticalRatio[1] - h * _config.AutoScaling.RoiVerticalRatio[0]))];
+        var oxOff = (int)(w * _config.AutoScaling.RoiHorizontalRatio[0]);
+        var oyOff = (int)(h * _config.AutoScaling.RoiVerticalRatio[0]);
 
         var allPts = new List<(int X, int Y, int W, int H, double Score)>();
-        foreach (var tplKey in new[] { "tile_empty", "tile_disable" })
+        var tplKeyMap = new Dictionary<string, string>
         {
+            ["tile-empty"] = "tile_empty",
+            ["tile-disable"] = "tile_disable"
+        };
+
+        foreach (var tplName in _config.GridDetection.UsedTemplates)
+        {
+            if (!tplKeyMap.TryGetValue(tplName, out var tplKey)) continue;
+
             if (!_templates.TryGetValue(tplKey, out var tpl)) continue;
 
-            var pts = MatchTemplate(roi, tpl, 0.80);
+            var pts = MatchTemplate(roi, tpl, _config.GridDetection.TemplateMatchThreshold);
             foreach (var (x, y, tw, th, s) in pts)
                 allPts.Add((x + oxOff, y + oyOff, tw, th, s));
         }
@@ -213,9 +239,9 @@ public sealed class PuzzleDetector
         if (allPts.Count < 4)
             return null;
 
-        allPts = Nms(allPts, 0.5);
-        var minWh = Scaled(65);
-        var maxWh = Scaled(100);
+        allPts = Nms(allPts, _config.GridDetection.NmsIouThreshold);
+        var minWh = Scaled(_config.GridDetection.MinCellSize);
+        var maxWh = Scaled(_config.GridDetection.MaxCellSize);
         allPts = allPts.Where(p => p.W > minWh && p.W < maxWh && p.H > minWh && p.H < maxWh).ToList();
 
         if (allPts.Count < 4)
@@ -279,11 +305,11 @@ public sealed class PuzzleDetector
         var xs = centers.Select(c => c.Item1).Distinct().OrderBy(x => x).ToList();
         var ys = centers.Select(c => c.Item2).Distinct().OrderBy(y => y).ToList();
 
-        var minGap = Scaled(30);
+        var minGap = Scaled(_config.GridDetection.MinGapSize);
         var dxs = xs.Zip(xs.Skip(1), (a, b) => b - a).Where(d => d > minGap).ToList();
         var dys = ys.Zip(ys.Skip(1), (a, b) => b - a).Where(d => d > minGap).ToList();
 
-        var defaultCell = Scaled(87);
+        var defaultCell = Scaled(_config.GridDetection.DefaultCellSize);
         var cellW = dxs.Count > 0 ? (int)Median(dxs.Select(x => (double)x)) : defaultCell;
         var cellH = dys.Count > 0 ? (int)Median(dys.Select(x => (double)x)) : defaultCell;
 
@@ -332,16 +358,22 @@ public sealed class PuzzleDetector
     {
         var ch = cellGray.Rows;
         var cw = cellGray.Cols;
-        var m = Math.Max(5, Math.Min(ch, cw) / 10);
-        if (ch <= 2 * m || cw <= 2 * m)
+        var innerMargin = Math.Max(5, Math.Min(ch, cw) / 10);
+        innerMargin = Math.Max(innerMargin, (int)(Math.Min(ch, cw) * _config.TileClassification.InnerMarginRatio));
+
+        if (ch <= 2 * innerMargin || cw <= 2 * innerMargin)
             return new TileInfo { Type = TileType.Empty };
 
-        var innerHsv = cellHsv[new Rect(m, m, cw - 2 * m, ch - 2 * m)];
+        var innerHsv = cellHsv[new Rect(innerMargin, innerMargin, cw - 2 * innerMargin, ch - 2 * innerMargin)];
 
         // Lock: 高饱和度 AND 高亮度 (HSV: Item0=H, Item1=S, Item2=V)
         int totalCount = 0;
         double sumH = 0, sumS = 0, sumV = 0;
         int lockCount = 0;
+
+        var lockMinSat = _config.TileClassification.LockMinSaturation;
+        var lockMinVal = _config.TileClassification.LockMinValue;
+
         for (int y = 0; y < innerHsv.Rows; y++)
         {
             for (int x = 0; x < innerHsv.Cols; x++)
@@ -351,7 +383,7 @@ public sealed class PuzzleDetector
                 var sat = v.Item1;
                 var val = v.Item2;
                 totalCount++;
-                if (sat > 80 && val > 80)
+                if (sat > lockMinSat && val > lockMinVal)
                 {
                     lockCount++;
                     sumH += h;
@@ -362,15 +394,16 @@ public sealed class PuzzleDetector
         }
 
         var lockRatio = totalCount > 0 ? (double)lockCount / totalCount : 0;
-        if (lockRatio > 0.10)
+        if (lockRatio > _config.TileClassification.LockMinPixelRatio)
         {
             var avgH = (int)(sumH / lockCount);
             var avgS = (int)(sumS / lockCount);
             var avgV = (int)(sumV / lockCount);
-            if (avgV > 100 && avgS > 100)
+            // 真正的锁定格颜色明显：平均亮度应该 > lock_min_avg_val
+            if (avgV > _config.TileClassification.LockMinAvgValue && avgS > _config.TileClassification.LockMinAvgSaturation)
             {
-                var groupIdx = _colorGrouper.Register(avgH, avgS, avgV);
-                return TileInfo.Locked(ColorGrouper.Label(groupIdx));
+                var colorGroup = _colorGrouper.MatchNearest(avgH, avgS, avgV);
+                return TileInfo.Locked(colorGroup);
             }
         }
 
@@ -378,7 +411,7 @@ public sealed class PuzzleDetector
         var scDis = CellScore(cellGray, "tile_disable");
         var scEmp = CellScore(cellGray, "tile_empty");
         var bestScore = Math.Max(scDis, scEmp);
-        if (bestScore > 0.35)
+        if (bestScore > _config.TileClassification.TileMinScore)
         {
             if (scDis >= scEmp)
                 return TileInfo.Disabled;
@@ -388,7 +421,7 @@ public sealed class PuzzleDetector
         // Fallback: brightness and variance
         double meanV = 0, variance = 0;
         int vCount = 0;
-        var innerGray = cellGray[new Rect(m, m, cw - 2 * m, ch - 2 * m)];
+        var innerGray = cellGray[new Rect(innerMargin, innerMargin, cw - 2 * innerMargin, ch - 2 * innerMargin)];
         for (int y = 0; y < innerGray.Rows; y++)
         {
             for (int x = 0; x < innerGray.Cols; x++)
@@ -405,9 +438,9 @@ public sealed class PuzzleDetector
             variance = (variance / vCount) - (meanV * meanV);
         }
 
-        if (meanV < 45 && variance < 200)
+        if (meanV < _config.TileClassification.EmptyMeanValueThreshold && variance < _config.TileClassification.EmptyVarianceThreshold)
             return TileInfo.Empty;
-        if (meanV < 60 && variance > 100)
+        if (meanV < _config.TileClassification.DisabledMeanValueThreshold && variance > _config.TileClassification.DisabledVarianceThreshold)
             return TileInfo.Disabled;
 
         return TileInfo.Empty;
@@ -455,150 +488,164 @@ public sealed class PuzzleDetector
         using var hsv = new Mat();
         Cv2.CvtColor(roiBgr, hsv, ColorConversionCodes.BGR2HSV);
 
-        using var sat = new Mat();
-        using var val = new Mat();
-        Cv2.ExtractChannel(hsv, sat, 1);
-        Cv2.ExtractChannel(hsv, val, 2);
+        // 无元件颜色时返回空
+        if (_colorGrouper.ClusterCount == 0)
+            return reqs.Select(r => r.GroupBy(x => x.ColorGroup).Select(g => new ColorRequirement(g.Key, g.Count(), g.Count(x => x.Filled))).ToArray()).ToArray();
 
-        using var satBinary = new Mat();
-        Cv2.Threshold(sat, satBinary, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
-        var mask = satBinary;
-
-        var fgCount = Cv2.CountNonZero(mask);
-        var fgRatio = (double)fgCount / mask.Total();
-        if (fgRatio > 0.25)
+        // 按每种元件颜色分别计算相似度图并检测
+        for (int ci = 0; ci < _colorGrouper.ClusterCount; ci++)
         {
-            var flat = new List<byte>();
-            for (int y = 0; y < sat.Rows; y++)
-                for (int x = 0; x < sat.Cols; x++)
-                    flat.Add(sat.At<byte>(y, x));
-            var percent96 = Percentile(flat, 96);
-            Cv2.Threshold(sat, mask, percent96, 255, ThresholdTypes.Binary);
-        }
+            var (ch, cs, cv) = _colorGrouper.ColorHsv(ci);
+            var grp = ColorGrouper.Label(ci);
+            var simMap = SimilarityMapForColor(hsv, ch, cs, cv);
 
-        Cv2.FindContours(mask, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+            // 二值化
+            var simU8 = new Mat();
+            simMap.ConvertTo(simU8, MatType.CV_8U, 255.0);
+            var mask = new Mat();
+            Cv2.Threshold(simU8, mask, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);
 
-        foreach (var cnt in contours)
-        {
-            var rect = Cv2.BoundingRect(cnt);
-            var x = rect.X;
-            var y = rect.Y;
-            var w = rect.Width;
-            var h = rect.Height;
-            var area = w * h;
-
-            if (area < ScaledArea(15) || area > ScaledArea(800)) continue;
-            var aspect = (double)Math.Max(w, h) / Math.Max(Math.Min(w, h), 1);
-            if (aspect > 6) continue;
-
-            var barMask = mask[rect];
-            var barHsv = hsv[rect];
-            using (var barVal = new Mat())
+            if (Cv2.CountNonZero(mask) < 10)
             {
+                simU8.Dispose();
+                mask.Dispose();
+                continue;
+            }
+
+            var contours = Cv2.FindContoursAsArray(mask, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+            foreach (var cnt in contours)
+            {
+                var rect = Cv2.BoundingRect(cnt);
+                var x = rect.X;
+                var y = rect.Y;
+                var w = rect.Width;
+                var h = rect.Height;
+                var area = w * h;
+
+                if (area < ScaledArea(_config.RequirementDetection.MinArea) ||
+                    area > ScaledArea(_config.RequirementDetection.MaxArea))
+                    continue;
+                var aspect = (double)Math.Max(w, h) / Math.Max(Math.Min(w, h), 1);
+                if (aspect > _config.RequirementDetection.MaxAspectRatio)
+                    continue;
+
+                var barMask = mask[rect];
+                var barHsv = hsv[rect];
+
+                // 提取颜色像素
+                var colorPixels = new List<(int H, int S, int V)>();
+                for (int by = 0; by < barHsv.Rows; by++)
+                {
+                    for (int bx = 0; bx < barHsv.Cols; bx++)
+                    {
+                        if (barMask.At<byte>(by, bx) > 0)
+                        {
+                            var v = barHsv.At<Vec3b>(by, bx);
+                            colorPixels.Add((v.Item0, v.Item1, v.Item2));
+                        }
+                    }
+                }
+
+                if (colorPixels.Count < 5)
+                    continue;
+
+                var avgH = (int)colorPixels.Average(p => p.H);
+                var avgS = (int)colorPixels.Average(p => p.S);
+                var avgV = (int)colorPixels.Average(p => p.V);
+
+                // 判断 filled
+                using var barVal = new Mat();
                 Cv2.ExtractChannel(barHsv, barVal, 2);
 
-                var colorPixels = new List<(int H, int S, int V)>();
-            for (int by = 0; by < barHsv.Rows; by++)
-            {
-                for (int bx = 0; bx < barHsv.Cols; bx++)
+                double valCv = 0;
+                bool filled = false;
+                if (barVal.Rows >= _config.RequirementDetection.MinRegionSize &&
+                    barVal.Cols >= _config.RequirementDetection.MinRegionSize)
                 {
-                    if (barMask.At<byte>(by, bx) > 0)
-                        colorPixels.Add((barHsv.At<Vec3b>(by, bx).Item0, barHsv.At<Vec3b>(by, bx).Item1, barHsv.At<Vec3b>(by, bx).Item2));
+                    double sum = 0, sumSq = 0;
+                    int n = 0;
+                    for (int by = 0; by < barVal.Rows; by++)
+                        for (int bx = 0; bx < barVal.Cols; bx++)
+                        {
+                            var v = (double)barVal.At<byte>(by, bx);
+                            sum += v;
+                            sumSq += v * v;
+                            n++;
+                        }
+                    var mean = sum / n;
+                    var std = Math.Sqrt(sumSq / n - mean * mean);
+                    valCv = mean > 1 ? std / mean : 0;
+                    filled = valCv < _config.RequirementDetection.FilledCvThreshold;
                 }
-            }
-            if (colorPixels.Count < 5) continue;
 
-            var avgH = (int)colorPixels.Average(p => p.H);
-            var avgS = (int)colorPixels.Average(p => p.S);
-            var avgV = (int)colorPixels.Average(p => p.V);
+                int idx;
+                if (orient == "col")
+                {
+                    var cx = regionOff.X + x + w / 2;
+                    idx = (int)Math.Round((cx - gridStart - cellSz / 2.0) / cellSz);
+                }
+                else
+                {
+                    var cy = regionOff.Y + y + h / 2;
+                    idx = (int)Math.Round((cy - gridStart - cellSz / 2.0) / cellSz);
+                }
 
-            double valCv = 0;
-            bool filled = false;
-            if (barVal.Rows >= 5 && barVal.Cols >= 5)
-            {
-                double sum = 0, sumSq = 0;
-                int n = 0;
-                for (int by = 0; by < barVal.Rows; by++)
-                    for (int bx = 0; bx < barVal.Cols; bx++)
-                    {
-                        var v = (double)barVal.At<byte>(by, bx);
-                        sum += v;
-                        sumSq += v * v;
-                        n++;
-                    }
-                var mean = sum / n;
-                var std = Math.Sqrt(sumSq / n - mean * mean);
-                valCv = mean > 1 ? std / mean : 0;
-                filled = valCv < 0.35;
+                if (idx >= 0 && idx < nCells)
+                    reqs[idx].Add((grp, filled));
             }
 
-            var groupIdx = _colorGrouper.Register(avgH, avgS, avgV);
-            var colorGroup = ColorGrouper.Label(groupIdx);
-
-            int idx;
-            if (orient == "col")
-            {
-                var cx = regionOff.X + x + w / 2;
-                idx = (int)Math.Round((cx - gridStart - cellSz / 2.0) / cellSz);
-            }
-            else
-            {
-                var cy = regionOff.Y + y + h / 2;
-                idx = (int)Math.Round((cy - gridStart - cellSz / 2.0) / cellSz);
-            }
-
-            if (idx >= 0 && idx < nCells)
-                reqs[idx].Add((colorGroup, filled));
-            }
+            simU8.Dispose();
+            mask.Dispose();
         }
 
         return reqs.Select(r => r.GroupBy(x => x.ColorGroup).Select(g => new ColorRequirement(g.Key, g.Count(), g.Count(x => x.Filled))).ToArray()).ToArray();
     }
 
-    private static byte Percentile(List<byte> sorted, double p)
+    private Mat SimilarityMapForColor(Mat hsv, int ch, int cs, int cv)
     {
-        var list = sorted.OrderBy(x => x).ToList();
-        var idx = (int)(p / 100 * (list.Count - 1));
-        return list[Math.Clamp(idx, 0, list.Count - 1)];
+        var result = new Mat(hsv.Size(), MatType.CV_32F);
+
+        var hueWidth = _config.RequirementDetection.HueSimilarityWidth;
+        var minSat = _config.RequirementDetection.MinSaturation;
+        var minVal = _config.RequirementDetection.MinValue;
+
+        for (int y = 0; y < hsv.Rows; y++)
+        {
+            for (int x = 0; x < hsv.Cols; x++)
+            {
+                var v = hsv.At<Vec3b>(y, x);
+                var h = (float)v.Item0;
+                var s = (float)v.Item1;
+                var val = (float)v.Item2;
+
+                var d = Math.Abs(h - ch);
+                d = Math.Min(d, 180 - d);
+                var hueSim = Math.Max(0.0f, 1.0f - (float)d / hueWidth);
+                var valid = s >= minSat && val >= minVal ? 1.0f : 0.0f;
+                result.Set<float>(y, x, hueSim * valid);
+            }
+        }
+
+        return result;
     }
 
-    private ComponentInfo[] DetectComponents()
+    private ComponentInfo[] DetectComponents(int yLimit)
     {
         var ih = _image.Rows;
         var iw = _image.Cols;
-        var rx = 3 * iw / 5;
+        var rx = (int)(iw * _config.ComponentDetection.SearchStartXRatio);
+        var roiGray = _gray[new Rect(rx, 0, iw - rx, ih)];
         var rHsv = _hsv[new Rect(rx, 0, iw - rx, ih)];
 
-        using var sat = new Mat();
-        using var val = new Mat();
-        Cv2.ExtractChannel(rHsv, sat, 1);
-        Cv2.ExtractChannel(rHsv, val, 2);
-        using var rawMask = new Mat();
-        Cv2.Compare(sat, new Scalar(60), rawMask, CmpType.GT);
-        using var rawMask2 = new Mat();
-        Cv2.Compare(val, new Scalar(60), rawMask2, CmpType.GT);
-        using var combined = new Mat();
-        Cv2.BitwiseAnd(rawMask, rawMask2, combined);
-
-        Cv2.FindContours(combined, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
-
-        var blobs = new List<(int X, int Y, int W, int H, double Area)>();
-        foreach (var cnt in contours)
+        // 优先使用 component_flame 模板匹配
+        var blobs = DetectComponentsByTemplate(roiGray, rx, yLimit);
+        if (blobs.Count < 1)
         {
-            var rect = Cv2.BoundingRect(cnt);
-            var area = Cv2.ContourArea(cnt);
-            var x = rect.X + rx;
-            var y = rect.Y;
-            var w = rect.Width;
-            var h = rect.Height;
-
-            if (area > ScaledArea(500) && w > Scaled(30) && w < Scaled(200) && h > Scaled(30) && h < Scaled(200))
-            {
-                var aspect = (double)Math.Max(w, h) / Math.Max(Math.Min(w, h), 1);
-                if (aspect < 4)
-                    blobs.Add((x, y, w, h, area));
-            }
+            // 兜底：原有 HSV blob 检测
+            blobs = DetectComponentsByBlob(rHsv, rx, yLimit);
         }
+
         blobs = blobs.OrderBy(b => (b.Y, b.X)).ToList();
 
         var comps = new List<ComponentInfo>();
@@ -611,6 +658,109 @@ public sealed class PuzzleDetector
         return comps.ToArray();
     }
 
+    private List<(int X, int Y, int W, int H, double Area)> DetectComponentsByTemplate(Mat roiGray, int rx, int yLimit)
+    {
+        var result = new List<(int, int, int, int, double)>();
+        var rawTpl = _rawTemplates.GetValueOrDefault("component_flame");
+        if (rawTpl == null)
+            return result;
+
+        var rh = roiGray.Rows;
+        var bestPts = new List<(int X, int Y, int W, int H, double Score)>();
+        var bestN = 0;
+
+        foreach (var compScale in _config.ComponentDetection.TemplateScales)
+        {
+            var tpl = ResizeTemplate(rawTpl, compScale * _scale);
+            var th = tpl.Rows;
+            var tw = tpl.Cols;
+            if (th >= rh || tw >= roiGray.Cols)
+            {
+                tpl.Dispose();
+                continue;
+            }
+
+            using var res = new Mat();
+            Cv2.MatchTemplate(roiGray, tpl, res, TemplateMatchModes.CCoeffNormed);
+            Cv2.MinMaxLoc(res, out _, out double maxScoreRes, out _, out _);
+
+            var maxScore = (double)maxScoreRes;
+            var thresh = Math.Max(_config.ComponentDetection.TemplateMatchMinScore,
+                                  Math.Min(_config.ComponentDetection.TemplateMatchMaxScore, maxScore - 0.05));
+
+            var pts = MatchTemplate(roiGray, tpl, thresh);
+            var adjustedPts = pts.Select(p => (p.X + rx, p.Y, p.W, p.H, p.Score)).ToList();
+
+            // 排除底部 UI
+            adjustedPts = adjustedPts.Where(p => p.Y < yLimit).ToList();
+            adjustedPts = Nms(adjustedPts, _config.ComponentDetection.TemplateNmsIouThreshold);
+
+            var minTplSize = Scaled(_config.ComponentDetection.MinTemplateSize);
+            var maxTplSize = Scaled(_config.ComponentDetection.MaxTemplateSize);
+            adjustedPts = adjustedPts.Where(p => p.W > minTplSize && p.W < maxTplSize &&
+                                                p.H > minTplSize && p.H < maxTplSize).ToList();
+
+            if (adjustedPts.Count > bestN && adjustedPts.Count >= 1 && adjustedPts.Count <= 8)
+            {
+                bestN = adjustedPts.Count;
+                bestPts = adjustedPts;
+            }
+
+            tpl.Dispose();
+        }
+
+        if (bestPts.Count == 0)
+            return result;
+
+        return bestPts.Select(p => (p.X, p.Y, p.W, p.H, (double)(p.W * p.H))).ToList();
+    }
+
+    private List<(int X, int Y, int W, int H, double Area)> DetectComponentsByBlob(Mat rHsv, int rx, int yLimit)
+    {
+        using var sat = new Mat();
+        using var val = new Mat();
+        Cv2.ExtractChannel(rHsv, sat, 1);
+        Cv2.ExtractChannel(rHsv, val, 2);
+
+        using var rawMask = new Mat();
+        Cv2.Compare(sat, new Scalar(_config.ComponentDetection.BlobMinSaturation), rawMask, CmpType.GT);
+        using var rawMask2 = new Mat();
+        Cv2.Compare(val, new Scalar(_config.ComponentDetection.BlobMinValue), rawMask2, CmpType.GT);
+        using var combined = new Mat();
+        Cv2.BitwiseAnd(rawMask, rawMask2, combined);
+
+        Cv2.FindContours(combined, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+        var blobs = new List<(int, int, int, int, double)>();
+        foreach (var cnt in contours)
+        {
+            var rect = Cv2.BoundingRect(cnt);
+            var area = Cv2.ContourArea(cnt);
+            var x = rect.X + rx;
+            var y = rect.Y;
+            var w = rect.Width;
+            var h = rect.Height;
+
+            // 排除底部 UI
+            if (y >= yLimit)
+                continue;
+
+            if (area > ScaledArea(_config.ComponentDetection.BlobMinArea) &&
+                w > Scaled(_config.ComponentDetection.BlobMinSize) &&
+                w < Scaled(_config.ComponentDetection.BlobMaxSize) &&
+                h > Scaled(_config.ComponentDetection.BlobMinSize) &&
+                h < Scaled(_config.ComponentDetection.BlobMaxSize))
+            {
+                var aspect = (double)Math.Max(w, h) / Math.Max(Math.Min(w, h), 1);
+                if (aspect < _config.ComponentDetection.BlobMaxAspectRatio)
+                {
+                    blobs.Add((x, y, w, h, area));
+                }
+            }
+        }
+        return blobs;
+    }
+
     private ComponentInfo? ParseComponentBlob(int x, int y, int w, int h)
     {
         var blobHsv = _hsv[new Rect(x, y, w, h)];
@@ -620,11 +770,12 @@ public sealed class PuzzleDetector
         Cv2.ExtractChannel(blobHsv, val, 2);
         using var m1 = new Mat();
         using var m2 = new Mat();
-        Cv2.Compare(sat, new Scalar(60), m1, CmpType.GT);
-        Cv2.Compare(val, new Scalar(60), m2, CmpType.GT);
+        Cv2.Compare(sat, new Scalar(_config.ComponentDetection.BlobMinSaturation), m1, CmpType.GT);
+        Cv2.Compare(val, new Scalar(_config.ComponentDetection.BlobMinValue), m2, CmpType.GT);
         using var blobMask = new Mat();
         Cv2.BitwiseAnd(m1, m2, blobMask);
 
+        // 裁去边框辉光
         var hProj = new double[h];
         var vProj = new double[w];
         for (int r = 0; r < h; r++)
@@ -647,23 +798,28 @@ public sealed class PuzzleDetector
         var trimmed = blobMask[new Rect(cStart, rStart, cEnd - cStart, rEnd - rStart)];
         var th = trimmed.Rows;
         var tw = trimmed.Cols;
-        if (th < Scaled(10) || tw < Scaled(10)) return null;
+        if (th < Scaled(_config.ComponentDetection.MinShapeSize) || tw < Scaled(_config.ComponentDetection.MinShapeSize))
+            return null;
 
+        // 尝试不同网格尺寸
         int[][]? bestShape = null;
         double bestScore = -999;
 
-        for (int nr = 1; nr <= 4; nr++)
+        for (int nr = _config.ComponentDetection.MinRows; nr <= _config.ComponentDetection.MaxRows; nr++)
         {
-            for (int nc = 1; nc <= 4; nc++)
+            for (int nc = _config.ComponentDetection.MinCols; nc <= _config.ComponentDetection.MaxCols; nc++)
             {
                 var total = nr * nc;
-                if (total < 2 || total > 12) continue;
+                if (total < _config.ComponentDetection.MinTotalCells || total > _config.ComponentDetection.MaxTotalCells)
+                    continue;
 
                 var cellH = (double)th / nr;
                 var cellW = (double)tw / nc;
 
-                if (cellH < Scaled(12) || cellW < Scaled(12)) continue;
-                if (cellH > Scaled(45) || cellW > Scaled(45)) continue;
+                if (cellH < Scaled(_config.ComponentDetection.MinShapeSize) || cellW < Scaled(_config.ComponentDetection.MinShapeSize))
+                    continue;
+                if (cellH > Scaled(_config.ComponentDetection.MaxShapeSize) || cellW > Scaled(_config.ComponentDetection.MaxShapeSize))
+                    continue;
 
                 var shape = new int[nr][];
                 var fills = new List<double>();
@@ -679,15 +835,15 @@ public sealed class PuzzleDetector
                         var cell = trimmed[new Rect(x1, y1, x2 - x1, y2 - y1)];
                         var fill = cell.Total() > 0 ? (double)Cv2.CountNonZero(cell) / cell.Total() : 0;
                         fills.Add(fill);
-                        shape[r][c] = fill > 0.40 ? 1 : 0;
+                        shape[r][c] = fill > _config.ComponentDetection.CellFillThreshold ? 1 : 0;
                     }
                 }
 
                 var filled = shape.Sum(row => row.Sum());
                 if (filled == 0 || filled == total) continue;
 
-                var nClearFilled = fills.Count(f => f > 0.60);
-                var nClearEmpty = fills.Count(f => f < 0.15);
+                var nClearFilled = fills.Count(f => f > _config.ComponentDetection.ClearFilledThreshold);
+                var nClearEmpty = fills.Count(f => f < _config.ComponentDetection.ClearEmptyThreshold);
                 var nAmbiguous = total - nClearFilled - nClearEmpty;
 
                 var clarity = (double)(nClearFilled + nClearEmpty) / total;
@@ -705,11 +861,10 @@ public sealed class PuzzleDetector
         if (bestShape == null)
             bestShape = [[1]];
 
-        var maskCount = 0;
-        for (int r = 0; r < blobMask.Rows; r++)
-            for (int c = 0; c < blobMask.Cols; c++)
-                if (blobMask.At<byte>(r, c) > 0) maskCount++;
-        if (maskCount < ScaledArea(30)) return null;
+        // 提取颜色
+        var maskCount = Cv2.CountNonZero(blobMask);
+        if (maskCount < ScaledArea(_config.ComponentDetection.MinColorPixels))
+            return null;
 
         double sumH = 0, sumS = 0, sumV = 0;
         int pxCount = 0;
@@ -730,9 +885,10 @@ public sealed class PuzzleDetector
         var avgH = (int)(sumH / pxCount);
         var avgS = (int)(sumS / pxCount);
         var avgV = (int)(sumV / pxCount);
-        if (avgV < 80) return null;
+        if (avgV < _config.ComponentDetection.MinAvgValue)
+            return null;
 
-        var groupIdx = _colorGrouper.Register(avgH, avgS, avgV);
+        var colorGroup = _colorGrouper.MatchNearest(avgH, avgS, avgV);
         var shapeBool = new bool[bestShape.Length, bestShape[0].Length];
         for (int r = 0; r < bestShape.Length; r++)
             for (int c = 0; c < bestShape[r].Length; c++)
@@ -741,7 +897,7 @@ public sealed class PuzzleDetector
         return new ComponentInfo
         {
             Shape = shapeBool,
-            ColorGroup = ColorGrouper.Label(groupIdx)
+            ColorGroup = colorGroup
         };
     }
 

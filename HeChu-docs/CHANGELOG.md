@@ -4,6 +4,18 @@
 
 ---
 
+## REQ-014: WinUI3 图像识别算法与原型对齐
+- [2026-02-12] 创建需求
+- [2026-02-12] 完成开发：移植 prototype/detect.py 的完整识别算法到 WinUI3 项目；新增 DetectionConfig.cs 配置模型类；使用 .NET Configuration API + appsettings.json 替代 TOML 文件；调整检测顺序为 grid→components→tiles→requirements；实现按颜色相似度检测需求条；ColorGrouper 添加 MatchNearest 方法；锁定格和元件使用 MatchNearest 匹配颜色；添加元件模板检测（component-flame）并支持回退 blob 检测
+
+---
+
+## REQ-013: 优化原型的调试图生成 - 识别区域叠加图
+- [2026-02-12] 创建需求
+- [2026-02-12] 完成开发：新增 _generate_region_overlay 函数，生成 5_all_regions.png 调试图，包含暗化背景（原图亮度50%）、各识别区域的彩色边框（网格绿色、元件蓝色、锁定格黄色、需求条红色/绿色），以及元件和需求条的二值化识别结果（使用对应的 HSV 颜色叠加）
+
+---
+
 ## REQ-001: 终末地源石电路模块解谜 - UI 识别原型
 - [2026-02-10] 创建需求
 - [2026-02-10] 完成开发：实现网格检测、格子分类、行列需求和元件检测的原型验证

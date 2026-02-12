@@ -2,6 +2,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EndfieldPuzzleSolver.Recognition;
 using EndfieldPuzzleSolver.Recognition.Models;
+using EndfieldPuzzleSolver.Recognition.Config;
+using Microsoft.Extensions.Configuration;
 
 namespace EndfieldPuzzleSolver.ViewModels;
 
@@ -11,6 +13,12 @@ namespace EndfieldPuzzleSolver.ViewModels;
 public partial class MainViewModel : ObservableObject
 {
     private static readonly string TemplateDir = Path.Combine(AppContext.BaseDirectory, "Assets", "UiTemplates");
+    private static readonly IConfiguration Config = new ConfigurationBuilder()
+        .SetBasePath(AppContext.BaseDirectory)
+        .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+        .Build();
+    private static readonly DetectionConfig DetectionConfig = Config.GetSection("Detection").Get<DetectionConfig>()
+        ?? new DetectionConfig();
 
     /// <summary>
     /// 由 MainWindow 设置，用于选择图片文件。
@@ -142,7 +150,7 @@ public partial class MainViewModel : ObservableObject
         {
             var result = await Task.Run(() =>
             {
-                var detector = new PuzzleDetector(TemplateDir);
+                var detector = new PuzzleDetector(TemplateDir, DetectionConfig);
                 return detector.Detect(imagePath);
             });
 

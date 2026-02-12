@@ -253,6 +253,9 @@ class PuzzleDetector:
         tiles = self._classify_tiles(grid)
         reqs = self._detect_requirements(grid)
 
+        # 生成识别区域叠加图
+        self._generate_region_overlay(grid, comps, tiles, reqs)
+
         # 输出颜色组信息
         n_groups = len(self.color_grouper.clusters)
         print(f"\n[颜色] 共识别 {n_groups} 种颜色")
@@ -649,6 +652,172 @@ class PuzzleDetector:
             self._debug_save(f"3_{debug_mask_key}_sim_mask.png", combined_mask)
 
         return reqs
+
+    def _generate_region_overlay(self, grid, comps, tiles, reqs):
+        """
+        生成识别区域叠加图：
+        1. 将原图亮度降低一半
+        2. 在暗化背景上框选出所有识别区域
+        3. 叠加元件和需求条的二值化识别结果，使用对应的 HSV 颜色
+        """
+        if not self.debug or self.debug_dir is None:
+            return
+
+        print("\n[5/4] 生成识别区域叠加图")
+
+        # 1. 将原图亮度降低一半
+        h, w = self.image.shape[:2]
+        darkened = (self.image.astype(np.float32) * 0.5).astype(np.uint8)
+        overlay = darkened.copy()
+
+        # 创建颜色叠加层
+        color_overlay = np.zeros_like(overlay)
+
+        # 2. 绘制网格边框（绿色）
+        ox, oy = grid['origin']
+        cw, ch = grid['cell_size']
+        rows, cols = grid['size']
+        cv2.rectangle(overlay, (ox, oy), (ox + cw * cols, oy + ch * rows), (0, 255, 0), 3)
+
+        # 3. 绘制元件区域边框并叠加二值化结果
+        blob_min_sat = self.config.get_int('component_detection.blob_min_saturation', 60)
+        blob_min_val = self.config.get_int('component_detection.blob_min_value', 60)
+        hue_width = self.config.get_int('requirement_detection.hue_similarity_width', 10)
+
+        for comp in comps:
+            sx, sy, sw, sh = comp['slot_pos']
+            h_val, s_val, v_val = comp['color']
+
+            # 绘制边框
+            cv2.rectangle(overlay, (sx, sy), (sx + sw, sy + sh), (255, 100, 0), 2)
+
+            # 生成元件的二值化 mask（使用 HSV 颜色提取）
+            comp_region = self.hsv[sy:sy + sh, sx:sx + sw]
+
+            # 按元件颜色生成相似度 mask
+            h_arr = comp_region[:, :, 0].astype(np.float32)
+            s_arr = comp_region[:, :, 1].astype(np.float32)
+            v_arr = comp_region[:, :, 2].astype(np.float32)
+
+            d = np.abs(h_arr - h_val)
+            d = np.minimum(d, 180 - d)
+            hue_sim = np.maximum(0.0, 1.0 - d / hue_width)
+            valid = (s_arr >= blob_min_sat) & (v_arr >= blob_min_val)
+            mask = np.where(valid, hue_sim, 0.0)
+            mask = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
+
+            # 转换为 RGB 并叠加到颜色层
+            bgr_color = hsv_to_bgr(h_val, s_val, v_val)
+            mask_bool = mask > 0
+            for c in range(3):
+                color_overlay[sy:sy + sh, sx:sx + sw, c][mask_bool] = (
+                    color_overlay[sy:sy + sh, sx:sx + sw, c][mask_bool] * 0.7 +
+                    bgr_color[c] * 0.3
+                ).astype(np.uint8)
+
+        # 4. 绘制锁定格边框（黄色）
+        for r in range(rows):
+            for c in range(cols):
+                tile = tiles[r][c]
+                if tile['type'] == 'lock':
+                    x, y = ox + c * cw, oy + r * ch
+                    cv2.rectangle(overlay, (x + 2, y + 2), (x + cw - 2, y + ch - 2), (0, 255, 255), 2)
+
+        # 5. 绘制需求条边框并叠加二值化结果
+        search_margin = self._scaled(self.config.get_int('requirement_detection.search_margin', 150))
+        bar_hue_width = self.config.get_int('requirement_detection.hue_similarity_width', 10)
+        bar_min_sat = self.config.get_int('requirement_detection.min_saturation', 50)
+        bar_min_val = self.config.get_int('requirement_detection.min_value', 55)
+
+        # 列需求条
+        for c, bars in enumerate(reqs['columns']):
+            if not bars:
+                continue
+            cx = ox + c * cw
+            for bar in bars:
+                filled = bar.get('filled', False)
+                h_val, s_val, v_val = bar['color']
+                border_color = (0, 0, 255) if not filled else (0, 255, 0)
+
+                # 列需求在网格上方
+                ry_start = max(0, oy - search_margin)
+                ry_end = oy
+
+                # 绘制边框
+                cv2.rectangle(overlay, (cx + 5, ry_start), (cx + cw - 5, ry_end), border_color, 1)
+
+                # 生成需求条的二值化 mask
+                bar_region = self.hsv[ry_start:ry_end, cx + 5:cx + cw - 5]
+                if bar_region.size > 0:
+                    h_arr = bar_region[:, :, 0].astype(np.float32)
+                    s_arr = bar_region[:, :, 1].astype(np.float32)
+                    v_arr = bar_region[:, :, 2].astype(np.float32)
+
+                    d = np.abs(h_arr - h_val)
+                    d = np.minimum(d, 180 - d)
+                    hue_sim = np.maximum(0.0, 1.0 - d / bar_hue_width)
+                    valid = (s_arr >= bar_min_sat) & (v_arr >= bar_min_val)
+                    mask = np.where(valid, hue_sim, 0.0)
+                    mask = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
+
+                    # 转换为 RGB 并叠加
+                    bgr_color = hsv_to_bgr(h_val, s_val, v_val)
+                    mask_bool = mask > 0
+                    bh, bw = mask.shape
+                    for ch_c in range(3):
+                        color_overlay[ry_start:ry_start + bh, cx + 5:cx + 5 + bw, ch_c][mask_bool] = (
+                            color_overlay[ry_start:ry_start + bh, cx + 5:cx + 5 + bw, ch_c][mask_bool] * 0.7 +
+                            bgr_color[ch_c] * 0.3
+                        ).astype(np.uint8)
+
+        # 行需求条
+        for r, bars in enumerate(reqs['rows']):
+            if not bars:
+                continue
+            cy = oy + r * ch
+            for bar in bars:
+                filled = bar.get('filled', False)
+                h_val, s_val, v_val = bar['color']
+                border_color = (0, 0, 255) if not filled else (0, 255, 0)
+
+                # 行需求在网格左侧
+                rx_start = max(0, ox - search_margin)
+                rx_end = ox
+                if rx_start >= rx_end:
+                    continue
+
+                # 绘制边框
+                cv2.rectangle(overlay, (rx_start, cy + 5), (rx_end, cy + ch - 5), border_color, 1)
+
+                # 生成需求条的二值化 mask
+                bar_region = self.hsv[cy + 5:cy + ch - 5, rx_start:rx_end]
+                if bar_region.size > 0:
+                    h_arr = bar_region[:, :, 0].astype(np.float32)
+                    s_arr = bar_region[:, :, 1].astype(np.float32)
+                    v_arr = bar_region[:, :, 2].astype(np.float32)
+
+                    d = np.abs(h_arr - h_val)
+                    d = np.minimum(d, 180 - d)
+                    hue_sim = np.maximum(0.0, 1.0 - d / bar_hue_width)
+                    valid = (s_arr >= bar_min_sat) & (v_arr >= bar_min_val)
+                    mask = np.where(valid, hue_sim, 0.0)
+                    mask = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
+
+                    # 转换为 RGB 并叠加
+                    bgr_color = hsv_to_bgr(h_val, s_val, v_val)
+                    mask_bool = mask > 0
+                    bh, bw = mask.shape
+                    for ch_c in range(3):
+                        color_overlay[cy + 5:cy + 5 + bh, rx_start:rx_start + bw, ch_c][mask_bool] = (
+                            color_overlay[cy + 5:cy + 5 + bh, rx_start:rx_start + bw, ch_c][mask_bool] * 0.7 +
+                            bgr_color[ch_c] * 0.3
+                        ).astype(np.uint8)
+
+        # 叠加颜色层到 overlay
+        overlay = cv2.addWeighted(overlay, 0.6, color_overlay, 0.4, 0)
+
+        # 保存调试图
+        self._debug_save("5_all_regions.png", overlay)
 
     # ─────────── 4. 元件检测 ───────────
 
