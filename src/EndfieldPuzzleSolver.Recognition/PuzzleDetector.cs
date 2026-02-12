@@ -260,15 +260,27 @@ public sealed class PuzzleDetector
         using var res = new Mat();
         Cv2.MatchTemplate(imgGray, tpl, res, TemplateMatchModes.CCoeffNormed);
 
-        for (int y = 0; y < res.Rows; y++)
+        // 使用阈值创建二值掩码
+        var mask = new Mat();
+        Cv2.Threshold(res, mask, (float)thresh, 255, ThresholdTypes.Binary);
+
+        // 使用 FindNonZero 获取所有匹配点
+        using var nz = mask.FindNonZero();
+        if (nz.Empty() || nz.Rows == 0)
         {
-            for (int x = 0; x < res.Cols; x++)
-            {
-                var val = res.Get<float>(y, x);
-                if (val >= thresh)
-                    result.Add((x, y, tw, th, val));
-            }
+            mask.Dispose();
+            return result;
         }
+
+        // 遍历所有匹配点
+        for (int i = 0; i < nz.Rows; i++)
+        {
+            var pt = nz.At<Point>(i);
+            var val = res.Get<float>(pt.Y, pt.X);
+            result.Add((pt.X, pt.Y, tw, th, val));
+        }
+
+        mask.Dispose();
         return result;
     }
 
@@ -367,45 +379,58 @@ public sealed class PuzzleDetector
         var innerHsv = cellHsv[new Rect(innerMargin, innerMargin, cw - 2 * innerMargin, ch - 2 * innerMargin)];
 
         // Lock: 高饱和度 AND 高亮度 (HSV: Item0=H, Item1=S, Item2=V)
-        int totalCount = 0;
-        double sumH = 0, sumS = 0, sumV = 0;
-        int lockCount = 0;
-
         var lockMinSat = _config.TileClassification.LockMinSaturation;
         var lockMinVal = _config.TileClassification.LockMinValue;
 
-        for (int y = 0; y < innerHsv.Rows; y++)
-        {
-            for (int x = 0; x < innerHsv.Cols; x++)
-            {
-                var v = innerHsv.At<Vec3b>(y, x);
-                var h = v.Item0;
-                var sat = v.Item1;
-                var val = v.Item2;
-                totalCount++;
-                if (sat > lockMinSat && val > lockMinVal)
-                {
-                    lockCount++;
-                    sumH += h;
-                    sumS += sat;
-                    sumV += val;
-                }
-            }
-        }
+        // 分离通道
+        var channels = Cv2.Split(innerHsv);
+        var hChannel = channels[0];
+        var sChannel = channels[1];
+        var vChannel = channels[2];
+
+        // 创建饱和度和亮度掩码
+        var satMask = new Mat();
+        var valMask = new Mat();
+        Cv2.Compare(sChannel, new Scalar((byte)lockMinSat), satMask, CmpType.GT);
+        Cv2.Compare(vChannel, new Scalar((byte)lockMinVal), valMask, CmpType.GT);
+
+        // 组合掩码
+        var lockMask = new Mat();
+        Cv2.BitwiseAnd(satMask, valMask, lockMask);
+
+        // 统计符合条件的像素数
+        var lockCount = Cv2.CountNonZero(lockMask);
+        var totalCount = innerHsv.Total();
 
         var lockRatio = totalCount > 0 ? (double)lockCount / totalCount : 0;
         if (lockRatio > _config.TileClassification.LockMinPixelRatio)
         {
-            var avgH = (int)(sumH / lockCount);
-            var avgS = (int)(sumS / lockCount);
-            var avgV = (int)(sumV / lockCount);
+            // 计算符合条件的像素的平均 HSV 值
+            using var maskedH = new Mat();
+            using var maskedS = new Mat();
+            using var maskedV = new Mat();
+            Cv2.BitwiseAnd(hChannel, lockMask, maskedH);
+            Cv2.BitwiseAnd(sChannel, lockMask, maskedS);
+            Cv2.BitwiseAnd(vChannel, lockMask, maskedV);
+
+            var avgH = Cv2.Sum(maskedH).Val0 / lockCount;
+            var avgS = Cv2.Sum(maskedS).Val0 / lockCount;
+            var avgV = Cv2.Sum(maskedV).Val0 / lockCount;
+
             // 真正的锁定格颜色明显：平均亮度应该 > lock_min_avg_val
             if (avgV > _config.TileClassification.LockMinAvgValue && avgS > _config.TileClassification.LockMinAvgSaturation)
             {
-                var colorGroup = _colorGrouper.MatchNearest(avgH, avgS, avgV);
+                var colorGroup = _colorGrouper.MatchNearest((int)avgH, (int)avgS, (int)avgV);
+                foreach (var chItem in channels) chItem.Dispose();
+                satMask.Dispose(); valMask.Dispose(); lockMask.Dispose();
+                maskedH.Dispose(); maskedS.Dispose(); maskedV.Dispose();
                 return TileInfo.Locked(colorGroup);
             }
         }
+
+        // 释放临时 Mat
+        foreach (var chItem in channels) chItem.Dispose();
+        satMask.Dispose(); valMask.Dispose(); lockMask.Dispose();
 
         // Disabled vs Empty: template competition
         var scDis = CellScore(cellGray, "tile_disable");
@@ -418,25 +443,11 @@ public sealed class PuzzleDetector
             return TileInfo.Empty;
         }
 
-        // Fallback: brightness and variance
-        double meanV = 0, variance = 0;
-        int vCount = 0;
+        // Fallback: brightness and variance using MeanStdDev
         var innerGray = cellGray[new Rect(innerMargin, innerMargin, cw - 2 * innerMargin, ch - 2 * innerMargin)];
-        for (int y = 0; y < innerGray.Rows; y++)
-        {
-            for (int x = 0; x < innerGray.Cols; x++)
-            {
-                var v = innerGray.At<byte>(y, x);
-                meanV += v;
-                variance += v * v;
-                vCount++;
-            }
-        }
-        if (vCount > 0)
-        {
-            meanV /= vCount;
-            variance = (variance / vCount) - (meanV * meanV);
-        }
+        Cv2.MeanStdDev(innerGray, out var mean, out var stddev);
+        var meanV = mean.Val0;
+        var variance = stddev.Val0 * stddev.Val0;
 
         if (meanV < _config.TileClassification.EmptyMeanValueThreshold && variance < _config.TileClassification.EmptyVarianceThreshold)
             return TileInfo.Empty;
@@ -533,51 +544,49 @@ public sealed class PuzzleDetector
                 var barMask = mask[rect];
                 var barHsv = hsv[rect];
 
-                // 提取颜色像素
-                var colorPixels = new List<(int H, int S, int V)>();
-                for (int by = 0; by < barHsv.Rows; by++)
+                // 分离 HSV 通道
+                var barChannels = Cv2.Split(barHsv);
+                var hBar = barChannels[0];
+                var sBar = barChannels[1];
+                var vBar = barChannels[2];
+
+                // 使用掩码提取颜色像素并计算平均值
+                using var maskedH = new Mat();
+                using var maskedS = new Mat();
+                using var maskedV = new Mat();
+                Cv2.BitwiseAnd(hBar, barMask, maskedH);
+                Cv2.BitwiseAnd(sBar, barMask, maskedS);
+                Cv2.BitwiseAnd(vBar, barMask, maskedV);
+
+                var pxCount = Cv2.CountNonZero(barMask);
+                if (pxCount < 5)
                 {
-                    for (int bx = 0; bx < barHsv.Cols; bx++)
-                    {
-                        if (barMask.At<byte>(by, bx) > 0)
-                        {
-                            var v = barHsv.At<Vec3b>(by, bx);
-                            colorPixels.Add((v.Item0, v.Item1, v.Item2));
-                        }
-                    }
+                    foreach (var chItem in barChannels) chItem.Dispose();
+                    maskedH.Dispose(); maskedS.Dispose(); maskedV.Dispose();
+                    continue;
                 }
 
-                if (colorPixels.Count < 5)
-                    continue;
+                var avgH = Cv2.Sum(maskedH).Val0 / pxCount;
+                var avgS = Cv2.Sum(maskedS).Val0 / pxCount;
+                var avgV = Cv2.Sum(maskedV).Val0 / pxCount;
 
-                var avgH = (int)colorPixels.Average(p => p.H);
-                var avgS = (int)colorPixels.Average(p => p.S);
-                var avgV = (int)colorPixels.Average(p => p.V);
-
-                // 判断 filled
-                using var barVal = new Mat();
-                Cv2.ExtractChannel(barHsv, barVal, 2);
-
+                // 判断 filled - 使用 MeanStdDev 计算标准差
+                // 注意：必须在 Dispose barChannels 之前访问 vBar
                 double valCv = 0;
                 bool filled = false;
-                if (barVal.Rows >= _config.RequirementDetection.MinRegionSize &&
-                    barVal.Cols >= _config.RequirementDetection.MinRegionSize)
+                if (vBar.Rows >= _config.RequirementDetection.MinRegionSize &&
+                    vBar.Cols >= _config.RequirementDetection.MinRegionSize)
                 {
-                    double sum = 0, sumSq = 0;
-                    int n = 0;
-                    for (int by = 0; by < barVal.Rows; by++)
-                        for (int bx = 0; bx < barVal.Cols; bx++)
-                        {
-                            var v = (double)barVal.At<byte>(by, bx);
-                            sum += v;
-                            sumSq += v * v;
-                            n++;
-                        }
-                    var mean = sum / n;
-                    var std = Math.Sqrt(sumSq / n - mean * mean);
-                    valCv = mean > 1 ? std / mean : 0;
+                    Cv2.MeanStdDev(vBar, out var mean, out var stddev);
+                    var meanVal = mean.Val0;
+                    var stdVal = stddev.Val0;
+                    valCv = meanVal > 1 ? stdVal / meanVal : 0;
                     filled = valCv < _config.RequirementDetection.FilledCvThreshold;
                 }
+
+                // 释放临时 Mat
+                foreach (var chItem in barChannels) chItem.Dispose();
+                maskedH.Dispose(); maskedS.Dispose(); maskedV.Dispose();
 
                 int idx;
                 if (orient == "col")
@@ -604,28 +613,64 @@ public sealed class PuzzleDetector
 
     private Mat SimilarityMapForColor(Mat hsv, int ch, int cs, int cv)
     {
-        var result = new Mat(hsv.Size(), MatType.CV_32F);
+        // 分离 HSV 通道
+        var channels = Cv2.Split(hsv);
+        var hChannel = channels[0];
+        var sChannel = channels[1];
+        var vChannel = channels[2];
 
         var hueWidth = _config.RequirementDetection.HueSimilarityWidth;
         var minSat = _config.RequirementDetection.MinSaturation;
         var minVal = _config.RequirementDetection.MinValue;
 
-        for (int y = 0; y < hsv.Rows; y++)
-        {
-            for (int x = 0; x < hsv.Cols; x++)
-            {
-                var v = hsv.At<Vec3b>(y, x);
-                var h = (float)v.Item0;
-                var s = (float)v.Item1;
-                var val = (float)v.Item2;
+        // 转换为 float 类型
+        var hFloat = new Mat();
+        var sFloat = new Mat();
+        var vFloat = new Mat();
+        hChannel.ConvertTo(hFloat, MatType.CV_32F);
+        sChannel.ConvertTo(sFloat, MatType.CV_32F);
+        vChannel.ConvertTo(vFloat, MatType.CV_32F);
 
-                var d = Math.Abs(h - ch);
-                d = Math.Min(d, 180 - d);
-                var hueSim = Math.Max(0.0f, 1.0f - (float)d / hueWidth);
-                var valid = s >= minSat && val >= minVal ? 1.0f : 0.0f;
-                result.Set<float>(y, x, hueSim * valid);
-            }
-        }
+        // 创建目标色相矩阵
+        var chMat = new Mat(hsv.Size(), MatType.CV_32F, new Scalar(ch));
+
+        // 计算色相距离: |h - ch|
+        var hueDist = new Mat();
+        Cv2.Absdiff(hFloat, chMat, hueDist);
+
+        // 计算最小距离: min(d, 180 - d)
+        var hueDist2 = new Mat();
+        Cv2.Subtract(new Scalar(180.0), hueDist, hueDist2);
+        Cv2.Min(hueDist, hueDist2, hueDist);
+
+        // 计算色相相似度: max(0, 1 - d / hueWidth)
+        hueDist *= (1.0f / hueWidth);
+        Cv2.Subtract(new Scalar(1.0f), hueDist, hueDist);
+        Cv2.Max(hueDist, new Scalar(0.0f), hueDist);
+
+        // 创建饱和度和亮度掩码
+        var satMask = new Mat();
+        var valMask = new Mat();
+        Cv2.Compare(sFloat, new Scalar((float)minSat), satMask, CmpType.GE);
+        Cv2.Compare(vFloat, new Scalar((float)minVal), valMask, CmpType.GE);
+
+        // 组合有效区域掩码
+        var validMask = new Mat();
+        Cv2.BitwiseAnd(satMask, valMask, validMask);
+
+        // 将掩码转换为 float 类型
+        var validFloat = new Mat();
+        validMask.ConvertTo(validFloat, MatType.CV_32F, 1.0 / 255.0);
+
+        // 组合最终结果
+        var result = new Mat();
+        Cv2.Multiply(hueDist, validFloat, result);
+
+        // 释放临时 Mat
+        foreach (var chItem in channels) chItem.Dispose();
+        hFloat.Dispose(); sFloat.Dispose(); vFloat.Dispose();
+        chMat.Dispose(); hueDist2.Dispose();
+        satMask.Dispose(); valMask.Dispose(); validMask.Dispose(); validFloat.Dispose();
 
         return result;
     }
@@ -861,27 +906,34 @@ public sealed class PuzzleDetector
         if (bestShape == null)
             bestShape = [[1]];
 
-        // 提取颜色
+        // 提取颜色 - 使用掩码操作替代双重循环
         var maskCount = Cv2.CountNonZero(blobMask);
         if (maskCount < ScaledArea(_config.ComponentDetection.MinColorPixels))
             return null;
 
-        double sumH = 0, sumS = 0, sumV = 0;
-        int pxCount = 0;
-        for (int r = 0; r < blobHsv.Rows; r++)
-        {
-            for (int c = 0; c < blobHsv.Cols; c++)
-            {
-                if (blobMask.At<byte>(r, c) > 0)
-                {
-                    var v = blobHsv.At<Vec3b>(r, c);
-                    sumH += v.Item0;
-                    sumS += v.Item1;
-                    sumV += v.Item2;
-                    pxCount++;
-                }
-            }
-        }
+        // 分离 blobHsv 的通道
+        var blobChannels = Cv2.Split(blobHsv);
+        var blobH = blobChannels[0];
+        var blobS = blobChannels[1];
+        var blobV = blobChannels[2];
+
+        // 使用掩码提取颜色像素并计算平均值
+        using var maskedBlobH = new Mat();
+        using var maskedBlobS = new Mat();
+        using var maskedBlobV = new Mat();
+        Cv2.BitwiseAnd(blobH, blobMask, maskedBlobH);
+        Cv2.BitwiseAnd(blobS, blobMask, maskedBlobS);
+        Cv2.BitwiseAnd(blobV, blobMask, maskedBlobV);
+
+        var sumH = Cv2.Sum(maskedBlobH).Val0;
+        var sumS = Cv2.Sum(maskedBlobS).Val0;
+        var sumV = Cv2.Sum(maskedBlobV).Val0;
+        var pxCount = maskCount;
+
+        // 释放临时 Mat
+        foreach (var chItem in blobChannels) chItem.Dispose();
+        maskedBlobH.Dispose(); maskedBlobS.Dispose(); maskedBlobV.Dispose();
+
         var avgH = (int)(sumH / pxCount);
         var avgS = (int)(sumS / pxCount);
         var avgV = (int)(sumV / pxCount);
