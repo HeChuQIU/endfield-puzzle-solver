@@ -1,0 +1,143 @@
+# 终末地源石电路模块解谜 - 图像识别配置文件
+# 所有图像识别参数集中管理，便于调试和优化
+
+# 颜色分组参数
+[color_grouping]
+# Hue 差值小于此阈值视为同种颜色（0-180 范围）
+# 值越小，区分越严格；值越大，容易将相似颜色合并
+hue_merge_distance = 18
+
+# 自动缩放探测参数
+[auto_scaling]
+# 缩放系数搜索范围 [min, max]
+# 根据游戏分辨率和 UI 缩放设置调整
+search_range = [0.5, 2.0]
+
+# 搜索步长，越小越精确但计算量越大
+step_size = 0.05
+
+# ROI 水平范围比例 [start, end]
+# 用于在图像中选取搜索区域，排除边缘干扰
+roi_horizontal_ratio = [0.1667, 0.6667]  # 1/6 到 2/3
+
+# ROI 垂直范围比例 [start, end]
+roi_vertical_ratio = [0.1667, 0.8333]   # 1/6 到 5/6
+
+# 网格检测参数
+[grid_detection]
+
+# 模板匹配
+# 模板匹配阈值（0.0-1.0），值越大匹配越严格
+# 降低此值可能增加误检，提高可能漏检
+template_match_threshold = 0.80
+
+# 使用的模板列表
+used_templates = ["tile-empty", "tile-disable"]
+
+# 非极大值抑制（NMS）
+# NMS IOU 阈值（0.0-1.0），用于去除重叠的检测结果
+# 值越小，保留的重复结果越少
+nms_iou_threshold = 0.5
+
+# 格子尺寸过滤（基于缩放后的像素）
+min_cell_size = 65   # 格子最小尺寸
+max_cell_size = 100  # 格子最大尺寸
+
+# 网格推断
+min_gap_size = 30    # 格子间距最小值，用于排除过近的点
+default_cell_size = 87  # 默认格子尺寸，当无法推断时使用
+
+# 格子分类参数
+[tile_classification]
+
+# 内部区域缩进比例
+# 分析格子内容时忽略边缘辉光，0.0 表示不缩进，0.5 表示缩进一半
+inner_margin_ratio = 0.1
+
+# 锁定格检测
+# 锁定格特征：高饱和度 AND 高亮度
+lock_min_saturation = 80   # 最小饱和度（0-255）
+lock_min_value = 80        # 最小亮度（0-255）
+
+# 锁定格最小像素占比（0.0-1.0）
+# 只有超过此比例的像素满足条件才判定为锁定格
+lock_min_pixel_ratio = 0.10
+
+# 锁定格颜色质量检查
+lock_min_avg_value = 100        # 最小平均亮度（0-255）
+lock_min_avg_saturation = 100   # 最小平均饱和度（0-255）
+
+# 模板匹配分类
+# 模板匹配最小得分（0.0-1.0），低于此值不使用模板匹配结果
+tile_min_score = 0.35
+
+# 兜底分类（当模板匹配失败时使用）
+empty_mean_value_threshold = 45    # 空格平均亮度阈值（0-255）
+empty_variance_threshold = 200      # 空格灰度方差阈值，空格纹理少
+disabled_mean_value_threshold = 60  # 禁用格平均亮度阈值（0-255）
+disabled_variance_threshold = 100   # 禁用格灰度方差阈值，禁用格有条纹纹理
+
+# 需求条检测参数
+[requirement_detection]
+
+# 搜索范围
+search_margin = 150  # 搜索边距（像素），在网格外扩多少像素查找需求条
+
+# 颜色相似度计算
+hue_similarity_width = 10   # Hue 相似度宽度（0-180），决定颜色匹配范围
+min_saturation = 50         # 最小饱和度（0-255），排除暗色背景
+min_value = 55              # 最小亮度（0-255），排除暗色背景
+
+# 形状过滤（基于缩放后的平方像素）
+min_area = 15      # 最小面积，过滤噪声
+max_area = 800     # 最大面积，过滤非需求条区域
+max_aspect_ratio = 6.0  # 最大长宽比，需求条通常是细长的
+
+# 填充判断
+filled_cv_threshold = 0.35  # 变异系数阈值，小于此值判定为已填充（实心）
+# CV = std / mean，实心的亮度分布更均匀
+min_region_size = 5        # 最小区域尺寸，避免极小区域误判
+
+# 元件检测参数
+[component_detection]
+
+# 搜索范围
+search_start_x_ratio = 0.6  # 右侧区域起始位置比例（0.0-1.0）
+y_limit_offset = 150        # Y轴上限偏移（像素），排除底部 UI（机器人、修门等）
+
+# 模板匹配检测（使用 component-flame 模板）
+template_scales = [0.5, 0.6, 0.7, 0.8, 1.0]  # 多尺度列表
+template_match_min_score = 0.55  # 最小匹配得分（0.0-1.0）
+template_match_max_score = 0.75  # 最大匹配得分（0.0-1.0）
+# 实际阈值 = max(min_score, max_score - 0.05)，根据最大得分自适应调整
+
+template_nms_iou_threshold = 0.5  # NMS IOU 阈值（0.0-1.0）
+min_template_size = 45   # 模板最小尺寸（像素）
+max_template_size = 130  # 模板最大尺寸（像素）
+
+# Blob 检测（回退方案，当模板匹配无结果时使用）
+blob_min_saturation = 60  # Blob 最小饱和度（0-255）
+blob_min_value = 60       # Blob 最小亮度（0-255）
+blob_min_area = 500       # Blob 最小面积（缩放后的平方像素）
+blob_min_size = 30        # Blob 最小尺寸（像素）
+blob_max_size = 200       # Blob 最大尺寸（像素）
+blob_max_aspect_ratio = 4.0  # Blob 最大长宽比
+
+# 形状推断（从元件 blob 推断形状矩阵）
+min_shape_size = 10       # 形状最小尺寸（像素）
+max_shape_size = 45       # 形状最大尺寸（像素）
+min_total_cells = 2       # 最小总格子数
+max_total_cells = 12      # 最大总格子数
+min_rows = 1              # 最小行数
+max_rows = 4              # 最大行数
+min_cols = 1              # 最小列数
+max_cols = 4              # 最大列数
+
+# 形状推断评分参数
+cell_fill_threshold = 0.40    # 格子填充阈值（0.0-1.0），大于此值判定为有内容
+clear_filled_threshold = 0.60  # 清晰填充阈值（0.0-1.0），用于评分
+clear_empty_threshold = 0.15    # 清晰空阈值（0.0-1.0），用于评分
+
+# 颜色质量检查
+min_color_pixels = 30  # 最小颜色像素数（缩放后的平方像素）
+min_avg_value = 80     # 最小平均亮度（0-255），排除暗色噪声

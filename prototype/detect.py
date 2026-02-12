@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
+from config import Config, load_default_config
+
 
 # ──────────────────────── 颜色工具 ────────────────────────
 
@@ -64,15 +66,14 @@ class ColorGrouper:
     不写死颜色名称，只区分「同一题目中不同的颜色」。
     """
 
-    HUE_MERGE_DIST = 18  # Hue 差值小于此阈值视为同组
-
-    def __init__(self):
+    def __init__(self, hue_merge_distance=18):
         self.clusters = []  # [(center_hue, avg_s, avg_v, [hue_samples])]
+        self.hue_merge_distance = hue_merge_distance
 
     def register(self, h, s, v):
         """注册一个颜色，返回其所属组的索引"""
         for i, (ch, _, _, samples) in enumerate(self.clusters):
-            if hue_distance(h, ch) < self.HUE_MERGE_DIST:
+            if hue_distance(h, ch) < self.hue_merge_distance:
                 samples.append((h, s, v))
                 # 更新中心
                 all_h = [x[0] for x in samples]
@@ -121,7 +122,7 @@ class ColorGrouper:
 
 class PuzzleDetector:
 
-    def __init__(self, template_dir, debug=False, debug_dir=None, scale=None):
+    def __init__(self, template_dir, debug=False, debug_dir=None, scale=None, config=None):
         self.template_dir = Path(template_dir)
         self.raw_templates = {}
         self.templates = {}
@@ -129,6 +130,19 @@ class PuzzleDetector:
         self.debug_dir = Path(debug_dir) if debug_dir else None
         self.user_scale = float(scale) if scale is not None else None
         self.scale = self.user_scale if self.user_scale is not None else 1.0
+
+        # 加载配置
+        if config is None:
+            config = Config(Path(__file__).parent / "image" / "config.toml")
+        self.config = config
+
+        # 从配置加载颜色分组参数
+        hue_merge_dist = config.get_int('color_grouping.hue_merge_distance', 18)
+
+        # 初始化 ColorGrouper（稍后在 detect 中创建实例）
+        self.color_grouper = None
+        self._hue_merge_distance = hue_merge_dist
+
         self._load_templates()
 
     def _debug_save(self, name, img):
@@ -171,9 +185,18 @@ class PuzzleDetector:
     def _estimate_scale(self):
         """多尺度模板匹配，实测当前截图中的 UI 缩放系数。"""
         h, w = self.gray.shape
-        roi = self.gray[h // 6:5 * h // 6, w // 6:2 * w // 3]
 
-        candidates = np.arange(0.50, 2.001, 0.05)
+        # 从配置加载参数
+        roi_h_ratio = self.config.get_list('auto_scaling.roi_horizontal_ratio', [1/6, 2/3])
+        roi_v_ratio = self.config.get_list('auto_scaling.roi_vertical_ratio', [1/6, 5/6])
+
+        roi = self.gray[int(h * roi_v_ratio[0]):int(h * roi_v_ratio[1]),
+                        int(w * roi_h_ratio[0]):int(w * roi_h_ratio[1])]
+
+        search_range = self.config.get_list('auto_scaling.search_range', [0.5, 2.0])
+        step_size = self.config.get_float('auto_scaling.step_size', 0.05)
+        candidates = np.arange(search_range[0], search_range[1] + 0.001, step_size)
+
         best_scale = 1.0
         best_score = -1.0
 
@@ -211,7 +234,9 @@ class PuzzleDetector:
             raise ValueError(f"无法读取: {image_path}")
         self.gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
         self.hsv = cv2.cvtColor(self.image, cv2.COLOR_BGR2HSV)
-        self.color_grouper = ColorGrouper()
+
+        # 初始化 ColorGrouper，使用配置的 hue_merge_distance
+        self.color_grouper = ColorGrouper(self._hue_merge_distance)
 
         if self.user_scale is None:
             self.scale = self._estimate_scale()
@@ -258,15 +283,27 @@ class PuzzleDetector:
     def _detect_grid(self):
         print("\n[1/4] 网格检测")
         h, w = self.gray.shape
-        roi = self.gray[h // 6:5 * h // 6, w // 6:2 * w // 3]
-        ox_off, oy_off = w // 6, h // 6
+
+        # 从配置加载参数
+        roi_h_ratio = self.config.get_list('auto_scaling.roi_horizontal_ratio', [1/6, 2/3])
+        roi_v_ratio = self.config.get_list('auto_scaling.roi_vertical_ratio', [1/6, 5/6])
+        roi = self.gray[int(h * roi_v_ratio[0]):int(h * roi_v_ratio[1]),
+                        int(w * roi_h_ratio[0]):int(w * roi_h_ratio[1])]
+        ox_off, oy_off = int(w * roi_h_ratio[0]), int(h * roi_v_ratio[0])
 
         all_pts = []
-        for tpl_key in ('tile_empty', 'tile_disable'):
+        used_templates = self.config.get_list('grid_detection.used_templates', ['tile-empty', 'tile-disable'])
+        template_threshold = self.config.get_float('grid_detection.template_match_threshold', 0.80)
+
+        tpl_key_map = {'tile-empty': 'tile_empty', 'tile-disable': 'tile_disable'}
+        for tpl_name in used_templates:
+            tpl_key = tpl_key_map.get(tpl_name)
+            if not tpl_key:
+                continue
             tpl = self.templates.get(tpl_key)
             if tpl is None:
                 continue
-            pts = self._match_template(roi, tpl, thresh=0.80)
+            pts = self._match_template(roi, tpl, thresh=template_threshold)
             pts = [(x + ox_off, y + oy_off, tw, th, s) for x, y, tw, th, s in pts]
             all_pts.extend(pts)
             print(f"  {tpl_key}: {len(pts)} 匹配")
@@ -274,9 +311,11 @@ class PuzzleDetector:
         if len(all_pts) < 4:
             raise ValueError("格子匹配数不足")
 
-        all_pts = self._nms(all_pts, iou_thresh=0.5)
-        min_wh = self._scaled(65)
-        max_wh = self._scaled(100)
+        nms_iou_thresh = self.config.get_float('grid_detection.nms_iou_threshold', 0.5)
+        all_pts = self._nms(all_pts, iou_thresh=nms_iou_thresh)
+
+        min_wh = self._scaled(self.config.get_int('grid_detection.min_cell_size', 65))
+        max_wh = self._scaled(self.config.get_int('grid_detection.max_cell_size', 100))
         all_pts = [p for p in all_pts if min_wh < p[2] < max_wh and min_wh < p[3] < max_wh]
         print(f"  NMS+过滤: {len(all_pts)}")
 
@@ -336,14 +375,16 @@ class PuzzleDetector:
     def _infer_grid(self, matches):
         centers = np.array([(x + w // 2, y + h // 2) for x, y, w, h, _ in matches])
 
+        # 从配置加载参数
+        min_gap = self._scaled(self.config.get_int('grid_detection.min_gap_size', 30))
+        default_cell = self._scaled(self.config.get_int('grid_detection.default_cell_size', 87))
+
         # 用排序后的相邻间距的中位数来估算格子尺寸
         xs = sorted(set(centers[:, 0]))
         ys = sorted(set(centers[:, 1]))
-        min_gap = self._scaled(30)
         dxs = [xs[i + 1] - xs[i] for i in range(len(xs) - 1) if xs[i + 1] - xs[i] > min_gap]
         dys = [ys[i + 1] - ys[i] for i in range(len(ys) - 1) if ys[i + 1] - ys[i] > min_gap]
 
-        default_cell = self._scaled(87)
         cell_w = int(np.median(dxs)) if dxs else default_cell
         cell_h = int(np.median(dys)) if dys else default_cell
 
@@ -385,9 +426,15 @@ class PuzzleDetector:
     def _classify_cell(self, cell_gray, cell_hsv):
         """分类优先级：lock（亮+彩色） > disabled/empty（模板匹配竞争）"""
         ch, cw = cell_gray.shape
-        # 缩进 10%，保留更多有效区域
+
+        # 从配置加载参数
+        margin_ratio = self.config.get_float('tile_classification.inner_margin_ratio', 0.1)
+
+        # 缩进比例，保留更多有效区域
         m = max(5, min(ch, cw) // 10)
-        inner_hsv = cell_hsv[m:-m, m:-m]
+        inner_margin = max(m, int(min(ch, cw) * margin_ratio))
+        inner_hsv = cell_hsv[inner_margin:-inner_margin, inner_margin:-inner_margin]
+
         if inner_hsv.size == 0:
             return {'type': 'unknown'}
 
@@ -395,15 +442,21 @@ class PuzzleDetector:
         val = inner_hsv[:, :, 2].astype(float)
 
         # ── 1. 锁定格：高饱和度 AND 高亮度 ──
-        lock_mask = (sat > 80) & (val > 80)
+        lock_min_sat = self.config.get_int('tile_classification.lock_min_saturation', 80)
+        lock_min_val = self.config.get_int('tile_classification.lock_min_value', 80)
+        lock_min_ratio = self.config.get_float('tile_classification.lock_min_pixel_ratio', 0.10)
+        lock_min_avg_val = self.config.get_int('tile_classification.lock_min_avg_value', 100)
+        lock_min_avg_sat = self.config.get_int('tile_classification.lock_min_avg_saturation', 100)
+
+        lock_mask = (sat > lock_min_sat) & (val > lock_min_val)
         lock_ratio = np.sum(lock_mask) / lock_mask.size
-        if lock_ratio > 0.10:
+        if lock_ratio > lock_min_ratio:
             px = inner_hsv[lock_mask]
             avg_h = int(np.mean(px[:, 0]))
             avg_s = int(np.mean(px[:, 1]))
             avg_v = int(np.mean(px[:, 2]))
-            # 真正的锁定格颜色明显：平均亮度应该 > 100
-            if avg_v > 100 and avg_s > 100:
+            # 真正的锁定格颜色明显：平均亮度应该 > lock_min_avg_val
+            if avg_v > lock_min_avg_val and avg_s > lock_min_avg_sat:
                 grp = self.color_grouper.match_nearest(avg_h, avg_s, avg_v)
                 return {
                     'type': 'lock',
@@ -416,8 +469,9 @@ class PuzzleDetector:
         sc_emp = self._cell_score(cell_gray, 'tile_empty')
 
         # 只要有一个模板匹配得不错就分类
+        tile_min_score = self.config.get_float('tile_classification.tile_min_score', 0.35)
         best_score = max(sc_dis, sc_emp)
-        if best_score > 0.35:
+        if best_score > tile_min_score:
             if sc_dis >= sc_emp:
                 return {'type': 'disabled'}
             else:
@@ -426,11 +480,17 @@ class PuzzleDetector:
         # ── 3. 兜底：用亮度和纹理 ──
         mean_v = float(np.mean(val))
         # 禁用格有对角条纹，灰度方差大于纯黑空格
-        gray_inner = cell_gray[m:-m, m:-m]
+        gray_inner = cell_gray[inner_margin:-inner_margin, inner_margin:-inner_margin]
         variance = float(np.var(gray_inner))
-        if mean_v < 45 and variance < 200:
+
+        empty_mean_v = self.config.get_int('tile_classification.empty_mean_value_threshold', 45)
+        empty_var = self.config.get_int('tile_classification.empty_variance_threshold', 200)
+        disabled_mean_v = self.config.get_int('tile_classification.disabled_mean_value_threshold', 60)
+        disabled_var = self.config.get_int('tile_classification.disabled_variance_threshold', 100)
+
+        if mean_v < empty_mean_v and variance < empty_var:
             return {'type': 'empty'}
-        if mean_v < 60 and variance > 100:
+        if mean_v < disabled_mean_v and variance > disabled_var:
             return {'type': 'disabled'}
 
         return {'type': 'unknown'}
@@ -457,18 +517,20 @@ class PuzzleDetector:
         rows, cols = grid['size']
         gw, gh = cw * cols, ch * rows
 
-        # 搜索范围扩大到 150px，但 mask 用 sat+val 联合阈值排除暗色背景辉光
-        margin = self._scaled(150)
-        col_roi = self.image[max(0, oy - margin):oy - 2, ox:ox + gw]
+        # 从配置加载参数
+        search_margin = self._scaled(self.config.get_int('requirement_detection.search_margin', 150))
+
+        # 搜索范围扩大到 search_margin，但 mask 用 sat+val 联合阈值排除暗色背景辉光
+        col_roi = self.image[max(0, oy - search_margin):oy - 2, ox:ox + gw]
         col_debug = col_roi.copy() if self.debug else None
         col_reqs = self._find_bars(col_roi, 'col', ox, cw, cols,
-                                    (ox, max(0, oy - margin)),
+                                    (ox, max(0, oy - search_margin)),
                                     debug_img=col_debug, debug_mask_key='col')
 
-        row_roi = self.image[oy:oy + gh, max(0, ox - margin):ox - 2]
+        row_roi = self.image[oy:oy + gh, max(0, ox - search_margin):ox - 2]
         row_debug = row_roi.copy() if self.debug else None
         row_reqs = self._find_bars(row_roi, 'row', oy, ch, rows,
-                                    (max(0, ox - margin), oy),
+                                    (max(0, ox - search_margin), oy),
                                     debug_img=row_debug, debug_mask_key='row')
 
         ct = sum(len(c) for c in col_reqs)
@@ -486,6 +548,11 @@ class PuzzleDetector:
 
     def _similarity_map_for_color(self, hsv, ch, cs, cv, hue_width=10, min_sat=50, min_val=55):
         """按元件颜色生成相似度图：越接近元件色越接近 1"""
+        # 从配置加载参数
+        hue_width = self.config.get_int('requirement_detection.hue_similarity_width', 10)
+        min_sat = self.config.get_int('requirement_detection.min_saturation', 50)
+        min_val = self.config.get_int('requirement_detection.min_value', 55)
+
         h_arr = hsv[:, :, 0].astype(np.float32)
         s_arr = hsv[:, :, 1].astype(np.float32)
         v_arr = hsv[:, :, 2].astype(np.float32)
@@ -507,6 +574,13 @@ class PuzzleDetector:
         if not self.color_grouper.clusters:
             return reqs
 
+        # 从配置加载参数
+        min_area = self._scaled_area(self.config.get_int('requirement_detection.min_area', 15))
+        max_area = self._scaled_area(self.config.get_int('requirement_detection.max_area', 800))
+        max_aspect = self.config.get_float('requirement_detection.max_aspect_ratio', 6.0)
+        filled_cv_thresh = self.config.get_float('requirement_detection.filled_cv_threshold', 0.35)
+        min_region_size = self.config.get_int('requirement_detection.min_region_size', 5)
+
         # 按每种元件颜色分别计算相似度图并检测
         combined_mask = None
         for ci, (ch, cs, cv, _) in enumerate(self.color_grouper.clusters):
@@ -524,10 +598,11 @@ class PuzzleDetector:
 
             for cnt in contours:
                 x, y, w, h = cv2.boundingRect(cnt)
-                if w * h < self._scaled_area(15) or w * h > self._scaled_area(800):
+                area = w * h
+                if area < min_area or area > max_area:
                     continue
                 aspect = max(w, h) / max(min(w, h), 1)
-                if aspect > 6:
+                if aspect > max_aspect:
                     continue
 
                 bar_mask = mask[y:y + h, x:x + w]
@@ -543,10 +618,10 @@ class PuzzleDetector:
 
                 bh, bw = bar_val.shape
                 val_cv = 0.0
-                if bh >= 5 and bw >= 5:
+                if bh >= min_region_size and bw >= min_region_size:
                     bar_val_f = bar_val.astype(float)
                     val_cv = float(np.std(bar_val_f) / max(np.mean(bar_val_f), 1))
-                    filled = val_cv < 0.35
+                    filled = val_cv < filled_cv_thresh
                 else:
                     filled = False
 
@@ -582,34 +657,51 @@ class PuzzleDetector:
         raw_tpl = self.raw_templates.get('component_flame')
         if raw_tpl is None:
             return []
+
+        # 从配置加载参数
+        template_scales = self.config.get_list('component_detection.template_scales', [0.5, 0.6, 0.7, 0.8, 1.0])
+        min_score = self.config.get_float('component_detection.template_match_min_score', 0.55)
+        max_score = self.config.get_float('component_detection.template_match_max_score', 0.75)
+        nms_iou = self.config.get_float('component_detection.template_nms_iou_threshold', 0.5)
+        min_tpl_size = self._scaled(self.config.get_int('component_detection.min_template_size', 45))
+        max_tpl_size = self._scaled(self.config.get_int('component_detection.max_template_size', 130))
+
         rh, rw = roi_gray.shape
         best_pts = []
         best_n = 0
-        for comp_scale in [0.5, 0.6, 0.7, 0.8, 1.0]:
+
+        for comp_scale in template_scales:
             tpl = self._resize_template(raw_tpl, comp_scale * self.scale)
             th, tw = tpl.shape
             if th >= rh or tw >= rw:
                 continue
             res = cv2.matchTemplate(roi_gray, tpl, cv2.TM_CCOEFF_NORMED)
-            max_score = float(res.max()) if res.size else 0
-            thresh = max(0.55, min(0.75, max_score - 0.05))
+            max_score_res = float(res.max()) if res.size else 0
+            thresh = max(min_score, min(max_score, max_score_res - 0.05))
             pts = self._match_template(roi_gray, tpl, thresh=thresh)
             pts = [(x + rx, y, tw, th, float(s)) for x, y, _, _, s in pts]
             pts = [p for p in pts if p[1] < y_limit]  # 排除底部 UI
-            pts = self._nms(pts, iou_thresh=0.5)
-            min_wh = self._scaled(45)
-            max_wh = self._scaled(130)
-            pts = [p for p in pts if min_wh < p[2] < max_wh and min_wh < p[3] < max_wh]
+            pts = self._nms(pts, iou_thresh=nms_iou)
+            pts = [p for p in pts if min_tpl_size < p[2] < max_tpl_size and min_tpl_size < p[3] < max_tpl_size]
             if len(pts) > best_n and 1 <= len(pts) <= 8:
                 best_n = len(pts)
                 best_pts = pts
+
         if not best_pts:
             return []
         return [(x, y, w, h, w * h) for x, y, w, h, _ in best_pts]
 
     def _detect_components_by_blob(self, r_hsv, rx, y_limit):
         """原有 HSV blob 检测（兜底），排除 y >= y_limit 的底部 UI"""
-        raw_mask = ((r_hsv[:, :, 1] > 60) & (r_hsv[:, :, 2] > 60)).astype(np.uint8)
+        # 从配置加载参数
+        blob_min_sat = self.config.get_int('component_detection.blob_min_saturation', 60)
+        blob_min_val = self.config.get_int('component_detection.blob_min_value', 60)
+        blob_min_area = self._scaled_area(self.config.get_int('component_detection.blob_min_area', 500))
+        blob_min_size = self._scaled(self.config.get_int('component_detection.blob_min_size', 30))
+        blob_max_size = self._scaled(self.config.get_int('component_detection.blob_max_size', 200))
+        blob_max_aspect = self.config.get_float('component_detection.blob_max_aspect_ratio', 4.0)
+
+        raw_mask = ((r_hsv[:, :, 1] > blob_min_sat) & (r_hsv[:, :, 2] > blob_min_val)).astype(np.uint8)
         contours, _ = cv2.findContours(raw_mask, cv2.RETR_EXTERNAL,
                                         cv2.CHAIN_APPROX_SIMPLE)
         blobs = []
@@ -618,16 +710,19 @@ class PuzzleDetector:
             if y >= y_limit:
                 continue  # 排除底部 UI（机器人、修门等）
             area = cv2.contourArea(cnt)
-            if area > self._scaled_area(500) and self._scaled(30) < w < self._scaled(200) and self._scaled(30) < h < self._scaled(200):
+            if area > blob_min_area and blob_min_size < w < blob_max_size and blob_min_size < h < blob_max_size:
                 aspect = max(w, h) / max(min(w, h), 1)
-                if aspect < 4:
+                if aspect < blob_max_aspect:
                     blobs.append((x + rx, y, w, h, area))
         return blobs
 
     def _detect_components(self, grid):
         print("\n[2/4] 元件检测")
         ih, iw = self.image.shape[:2]
-        rx = 3 * iw // 5
+
+        # 从配置加载参数
+        search_start_ratio = self.config.get_float('component_detection.search_start_x_ratio', 0.6)
+        rx = int(iw * search_start_ratio)
         roi_gray = self.gray[:, rx:]
         r_hsv = self.hsv[:, rx:]
 
@@ -636,7 +731,8 @@ class PuzzleDetector:
         rows, cols = grid['size']
         cw, ch = grid['cell_size']
         grid_bottom = oy + rows * ch
-        y_limit = grid_bottom + self._scaled(150)
+        y_limit_offset = self._scaled(self.config.get_int('component_detection.y_limit_offset', 150))
+        y_limit = grid_bottom + y_limit_offset
 
         # 优先使用 component_flame 模板匹配（元件卡片边框）
         blobs = self._detect_components_by_template(roi_gray, rx, y_limit)
@@ -650,7 +746,9 @@ class PuzzleDetector:
 
         # debug: 右侧区域 mask 和检测到的 blob
         if self.debug:
-            raw_mask = ((r_hsv[:, :, 1] > 60) & (r_hsv[:, :, 2] > 60)).astype(np.uint8)
+            blob_min_sat = self.config.get_int('component_detection.blob_min_saturation', 60)
+            blob_min_val = self.config.get_int('component_detection.blob_min_value', 60)
+            raw_mask = ((r_hsv[:, :, 1] > blob_min_sat) & (r_hsv[:, :, 2] > blob_min_val)).astype(np.uint8)
             self._debug_save("4_comp_mask.png", raw_mask * 255)
             dbg = self.image.copy()
             for x, y, w, h, area in blobs:
@@ -667,8 +765,10 @@ class PuzzleDetector:
                 # debug: 每个元件的 mask
                 if self.debug:
                     blob_hsv = self.hsv[y:y + h, x:x + w]
-                    blob_mask = ((blob_hsv[:, :, 1] > 60) &
-                                 (blob_hsv[:, :, 2] > 60)).astype(np.uint8) * 255
+                    blob_min_sat = self.config.get_int('component_detection.blob_min_saturation', 60)
+                    blob_min_val = self.config.get_int('component_detection.blob_min_value', 60)
+                    blob_mask = ((blob_hsv[:, :, 1] > blob_min_sat) &
+                                 (blob_hsv[:, :, 2] > blob_min_val)).astype(np.uint8) * 255
                     self._debug_save(f"4_comp_{i}_mask.png", blob_mask)
 
         print(f"  解析: {len(comps)}")
@@ -676,9 +776,26 @@ class PuzzleDetector:
 
     def _parse_component_blob(self, x, y, w, h):
         """对单个元件 blob，用网格搜索推断最佳形状矩阵"""
+        # 从配置加载参数
+        blob_min_sat = self.config.get_int('component_detection.blob_min_saturation', 60)
+        blob_min_val = self.config.get_int('component_detection.blob_min_value', 60)
+        min_shape_size = self._scaled(self.config.get_int('component_detection.min_shape_size', 10))
+        max_shape_size = self._scaled(self.config.get_int('component_detection.max_shape_size', 45))
+        min_total_cells = self.config.get_int('component_detection.min_total_cells', 2)
+        max_total_cells = self.config.get_int('component_detection.max_total_cells', 12)
+        min_rows = self.config.get_int('component_detection.min_rows', 1)
+        max_rows = self.config.get_int('component_detection.max_rows', 4)
+        min_cols = self.config.get_int('component_detection.min_cols', 1)
+        max_cols = self.config.get_int('component_detection.max_cols', 4)
+        cell_fill_thresh = self.config.get_float('component_detection.cell_fill_threshold', 0.40)
+        clear_filled_thresh = self.config.get_float('component_detection.clear_filled_threshold', 0.60)
+        clear_empty_thresh = self.config.get_float('component_detection.clear_empty_threshold', 0.15)
+        min_color_pixels = self._scaled_area(self.config.get_int('component_detection.min_color_pixels', 30))
+        min_avg_val = self.config.get_int('component_detection.min_avg_value', 80)
+
         blob_hsv = self.hsv[y:y + h, x:x + w]
-        blob_mask = ((blob_hsv[:, :, 1] > 60) &
-                     (blob_hsv[:, :, 2] > 60)).astype(np.uint8)
+        blob_mask = ((blob_hsv[:, :, 1] > blob_min_sat) &
+                     (blob_hsv[:, :, 2] > blob_min_val)).astype(np.uint8)
 
         # ── 1. 裁去边框辉光：找到内容边界 ──
         h_proj = np.sum(blob_mask, axis=1)
@@ -695,26 +812,26 @@ class PuzzleDetector:
 
         trimmed = blob_mask[r_start:r_end, c_start:c_end]
         th, tw = trimmed.shape
-        if th < self._scaled(10) or tw < self._scaled(10):
+        if th < min_shape_size or tw < min_shape_size:
             return None
 
         # ── 2. 尝试不同网格尺寸，选择最清晰分离的 ──
         best_shape = None
         best_score = -999
 
-        for nr in range(1, 5):
-            for nc in range(1, 5):
+        for nr in range(min_rows, max_rows + 1):
+            for nc in range(min_cols, max_cols + 1):
                 total = nr * nc
-                if total < 2 or total > 12:
+                if total < min_total_cells or total > max_total_cells:
                     continue
 
                 cell_h = th / nr
                 cell_w = tw / nc
 
                 # 格子尺寸不能太小也不能太大
-                if cell_h < self._scaled(12) or cell_w < self._scaled(12):
+                if cell_h < min_shape_size or cell_w < min_shape_size:
                     continue
-                if cell_h > self._scaled(45) or cell_w > self._scaled(45):
+                if cell_h > max_shape_size or cell_w > max_shape_size:
                     continue
 
                 shape = []
@@ -729,7 +846,7 @@ class PuzzleDetector:
                         cell = trimmed[y1:y2, x1:x2]
                         fill = float(np.sum(cell) / cell.size) if cell.size > 0 else 0.0
                         fills.append(fill)
-                        row.append(1 if fill > 0.40 else 0)
+                        row.append(1 if fill > cell_fill_thresh else 0)
                     shape.append(row)
 
                 filled = sum(sum(r) for r in shape)
@@ -737,8 +854,8 @@ class PuzzleDetector:
                     continue  # 全空或全满没意义
 
                 # 评分：综合清晰度 + 格子方形度 + 复杂度惩罚
-                n_clear_filled = sum(1 for f in fills if f > 0.60)
-                n_clear_empty = sum(1 for f in fills if f < 0.15)
+                n_clear_filled = sum(1 for f in fills if f > clear_filled_thresh)
+                n_clear_empty = sum(1 for f in fills if f < clear_empty_thresh)
                 n_ambiguous = total - n_clear_filled - n_clear_empty
 
                 # 清晰度（归一化）
@@ -758,7 +875,7 @@ class PuzzleDetector:
 
         # ── 3. 提取颜色 ──
         px_mask = blob_mask.astype(bool)
-        if np.sum(px_mask) < self._scaled_area(30):
+        if np.sum(px_mask) < min_color_pixels:
             return None
 
         px = blob_hsv[px_mask]
@@ -766,7 +883,7 @@ class PuzzleDetector:
         avg_s = int(np.mean(px[:, 1]))
         avg_v = int(np.mean(px[:, 2]))
 
-        if avg_v < 80:
+        if avg_v < min_avg_val:
             return None
 
         group_idx = self.color_grouper.register(avg_h, avg_s, avg_v)
@@ -944,6 +1061,8 @@ def main():
     parser.add_argument("--debug", action="store_true", help="输出中间调试图像")
     parser.add_argument("--scale", type=float, default=None,
                         help="手动指定 UI 缩放系数（不指定则自动探测）")
+    parser.add_argument("--config", type=str, default=None,
+                        help="指定配置文件路径（默认使用 image/config.toml）")
     args = parser.parse_args()
 
     image_path = args.image
@@ -961,8 +1080,23 @@ def main():
         print("错误: --scale 必须大于 0")
         sys.exit(1)
 
+    # 加载配置
+    config = None
+    if args.config:
+        config_path = Path(args.config)
+        if not config_path.exists():
+            print(f"错误: 配置文件不存在 - {config_path}")
+            sys.exit(1)
+        config = Config(config_path)
+        print(f"[配置] 使用自定义配置: {config_path}")
+    else:
+        # 使用默认配置
+        config = load_default_config()
+        print(f"[配置] 使用默认配置: {config._config_path}")
+
     template_dir = Path(__file__).parent / "image" / "ui-template"
-    detector = PuzzleDetector(template_dir, debug=args.debug, debug_dir=debug_dir, scale=args.scale)
+    detector = PuzzleDetector(template_dir, debug=args.debug, debug_dir=debug_dir,
+                               scale=args.scale, config=config)
     result = detector.detect(image_path)
 
     def to_json(obj):
