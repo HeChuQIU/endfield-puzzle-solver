@@ -158,7 +158,10 @@ public partial class MainViewModel : ObservableObject
             {
                 PuzzleData = result.Data;
                 SolveResult = null;
-                StatusMessage = "识别完成";
+                StatusMessage = "识别完成，正在求解...";
+
+                // 识别成功后自动求解
+                await SolvePuzzleAsync();
             }
             else
             {
@@ -189,7 +192,8 @@ public partial class MainViewModel : ObservableObject
         if (SolveResult is not { IsSolved: true } result || result.Steps.Count == 0)
             return PuzzleData.Tiles;
 
-        int idx = Math.Clamp(CurrentStepIndex, 0, result.Steps.Count - 1);
+        // 直接返回最后一步的结果（跳过步骤回放）
+        int idx = result.Steps.Count - 1;
         return result.Steps[idx].BoardSnapshot;
     }
 

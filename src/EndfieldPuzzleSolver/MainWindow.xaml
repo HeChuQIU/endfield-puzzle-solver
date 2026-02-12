@@ -13,13 +13,6 @@
         </Grid.RowDefinitions>
         <CommandBar Grid.Row="0" DefaultLabelPosition="Right">
             <AppBarButton x:Name="OpenScreenshotBtn" Icon="OpenFile" Label="打开截图" />
-            <AppBarButton x:Name="SolveBtn" Icon="Play" Label="求解" />
-            <AppBarSeparator />
-            <AppBarButton x:Name="PrevStepBtn" Icon="Back" Label="上一步" />
-            <AppBarButton x:Name="NextStepBtn" Icon="Forward" Label="下一步" />
-            <AppBarElementContainer>
-                <TextBlock x:Name="StepTextBlock" Text="步骤 0 / 0" VerticalAlignment="Center" Margin="12,0,0,0" />
-            </AppBarElementContainer>
         </CommandBar>
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>

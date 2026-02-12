@@ -33,16 +33,11 @@ public sealed partial class MainWindow : Window
         };
 
         OpenScreenshotBtn.Click += async (_, _) => await ViewModel.OpenScreenshotAsync();
-        SolveBtn.Click += async (_, _) => await ViewModel.SolvePuzzleAsync();
-        PrevStepBtn.Click += (_, _) => ViewModel.GoToPreviousStep();
-        NextStepBtn.Click += (_, _) => ViewModel.GoToNextStep();
 
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is nameof(MainViewModel.StatusMessage))
                 StatusInfoBar.Message = ViewModel.StatusMessage;
-            if (e.PropertyName is nameof(MainViewModel.StepNavigationText) or nameof(MainViewModel.CurrentStepIndex) or nameof(MainViewModel.TotalSteps))
-                StepTextBlock.Text = ViewModel.StepNavigationText;
         };
     }
 
