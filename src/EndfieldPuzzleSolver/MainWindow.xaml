@@ -6,38 +6,71 @@
 
     <Grid x:Name="RootGrid" AllowDrop="True" Background="Transparent"
           DragOver="BoardDropArea_DragOver" Drop="BoardDropArea_Drop">
+        <Grid.Resources>
+            <SolidColorBrush x:Key="CardBackground" Color="{ThemeResource CardBackgroundFillColorDefault}" />
+            <SolidColorBrush x:Key="CardBorderBrush" Color="{ThemeResource CardStrokeColorDefault}" />
+            <SolidColorBrush x:Key="CanvasBackground" Color="{ThemeResource LayerFillColorDefault}" />
+        </Grid.Resources>
+
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
+
         <CommandBar Grid.Row="0" DefaultLabelPosition="Right">
             <AppBarButton x:Name="OpenScreenshotBtn" Icon="OpenFile" Label="打开截图" />
         </CommandBar>
+
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="300" />
             </Grid.ColumnDefinitions>
-            <Border Grid.Column="0" Margin="8">
-                <Canvas x:Name="BoardCanvas" />
-            </Border>
-            <Border Grid.Column="1" Width="300" Padding="16">
-                <ScrollViewer>
-                    <StackPanel>
-                        <TextBlock Text="谜题信息" FontWeight="SemiBold" FontSize="16" />
-                        <StackPanel x:Name="PuzzleInfoPanel">
-                            <TextBlock x:Name="GridSizeText" Text="网格大小: - × -" />
-                            <TextBlock Text="颜色组:" FontWeight="SemiBold" />
-                            <ItemsControl x:Name="ColorGroupsItems" />
+
+            <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                <Border Background="{StaticResource CardBackground}" BorderBrush="{StaticResource CardBorderBrush}"
+                        BorderThickness="1" CornerRadius="8" Margin="8" Padding="16">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="谜题主体" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
+                        <Border Grid.Row="1" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="8"
+                                Background="{StaticResource CanvasBackground}">
+                            <Canvas x:Name="BoardCanvas" />
+                        </Border>
+                    </Grid>
+                </Border>
+            </ScrollViewer>
+
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <Border Background="{StaticResource CardBackground}" BorderBrush="{StaticResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="8" Margin="8" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="谜题信息" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
+                            <StackPanel x:Name="PuzzleInfoPanel">
+                                <TextBlock x:Name="GridSizeText" Text="网格大小: - × -" />
+                                <TextBlock Text="颜色组:" FontWeight="SemiBold" Margin="0,12,0,4" />
+                                <ItemsControl x:Name="ColorGroupsItems" />
+                            </StackPanel>
+                            <TextBlock x:Name="PlaceholderText" Text="请打开截图或拖入图片加载谜题" TextWrapping="Wrap" />
                         </StackPanel>
-                        <TextBlock x:Name="PlaceholderText" Text="请打开截图或拖入图片加载谜题" TextWrapping="Wrap" />
-                        <TextBlock Text="元件列表" FontWeight="SemiBold" FontSize="16" Margin="0,8,0,0" />
-                        <ItemsControl x:Name="ComponentsItems" />
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
+                    </Border>
+
+                    <Border Background="{StaticResource CardBackground}" BorderBrush="{StaticResource CardBorderBrush}"
+                            BorderThickness="1" CornerRadius="8" Margin="8" Padding="16">
+                        <StackPanel>
+                            <TextBlock Text="元件列表" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
+                            <ItemsControl x:Name="ComponentsItems" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
+
         <InfoBar Grid.Row="2" x:Name="StatusInfoBar" Message="就绪" IsOpen="True" IsClosable="False" />
     </Grid>
 </Window>
