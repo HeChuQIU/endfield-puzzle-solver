@@ -1,6 +1,6 @@
 # Endfield Puzzle Solver
 
-终末地理论拼图求解器
+终末地源石电路小游戏求解器
 
 ## 🚀 快速开始
 
@@ -12,7 +12,7 @@
 
 ```bash
 # 克隆仓库
-git clone <repository-url>
+git clone https://github.com/HeChuQIU/endfield-puzzle-solver
 cd endfield-puzzle-solver
 
 # 还原依赖
