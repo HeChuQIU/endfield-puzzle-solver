@@ -4,6 +4,17 @@
 
 ---
 
+## 发布配置 - GitHub Actions 自动化发布流程
+
+- [2026-02-14] 创建 GitHub Actions workflow 用于自动发布 Avalonia 版本
+- [2026-02-14] 验证 FFmpeg DLL 非必需（项目仅使用 OpenCV 图像处理功能），发布时自动移除以减小 27MB 体积
+- [2026-02-14] 确认 WinUI3 与 Native AOT 不兼容，无法正常运行，正式弃用 WinUI3 版本
+- [2026-02-14] 配置 Avalonia 为唯一发布版本：Native AOT + 单文件发布，总大小约 93MB（压缩后 38MB）
+- [2026-02-14] 创建本地测试脚本 `scripts/test-release.ps1` 用于验证发布流程
+- [2026-02-14] 更新项目文档：README.md、RELEASE.md、RELEASE-QUICK.md
+
+---
+
 ## REQ-022: 增强图片输入体验 - 拖入提示与剪贴板粘贴功能
 
 - [2026-02-14] 创建需求

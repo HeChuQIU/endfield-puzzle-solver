@@ -8,7 +8,8 @@
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
-    <PublishAot>true</PublishAot>
+    <!-- WinUI3 不兼容 Native AOT，已禁用 -->
+    <PublishAot>false</PublishAot>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>

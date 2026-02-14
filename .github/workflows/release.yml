@@ -1,0 +1,91 @@
+name: Release Avalonia Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如: v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout 代码
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+        
+    - name: 还原依赖
+      run: dotnet restore
+      
+    - name: 发布 Avalonia 项目
+      run: |
+        dotnet publish src/EndfieldPuzzleSolver.Avalonia/EndfieldPuzzleSolver.Avalonia.csproj `
+          -c Release `
+          -r win-x64 `
+          --self-contained `
+          -o publish/avalonia `
+          -p:PublishAot=true `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true
+      
+    - name: 移除不必要的文件
+      run: |
+        Remove-Item publish/avalonia/*.pdb -Force -ErrorAction SilentlyContinue
+        Remove-Item publish/avalonia/*.xml -Force -ErrorAction SilentlyContinue
+        Remove-Item publish/avalonia/opencv_videoio_ffmpeg4110_64.dll -Force -ErrorAction SilentlyContinue
+        
+    - name: 创建发布包
+      run: |
+        $version = "${{ github.event.inputs.version }}"
+        $zipName = "EndfieldPuzzleSolver-Avalonia-$version-win-x64.zip"
+        Compress-Archive -Path publish/avalonia/* -DestinationPath $zipName
+        echo "RELEASE_ZIP=$zipName" >> $env:GITHUB_ENV
+        
+    - name: 计算文件哈希
+      run: |
+        $hash = (Get-FileHash $env:RELEASE_ZIP -Algorithm SHA256).Hash
+        echo "SHA256: $hash" | Out-File -FilePath release-notes.txt
+        echo "FILE_HASH=$hash" >> $env:GITHUB_ENV
+        
+    - name: 创建 Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.event.inputs.version }}
+        name: ${{ github.event.inputs.version }}
+        body: |
+          ## Endfield Puzzle Solver - Avalonia 版本
+          
+          **版本**: ${{ github.event.inputs.version }}
+          **平台**: Windows x64
+          **构建时间**: ${{ github.run_id }}
+          
+          ### 📦 包含内容
+          - EndfieldPuzzleSolver.Avalonia.exe (主程序)
+          - 必需的运行时 DLL
+          - Assets 资源文件
+          - appsettings.json 配置文件
+          
+          ### 📝 使用说明
+          1. 下载 zip 文件
+          2. 解压到任意目录
+          3. 运行 `EndfieldPuzzleSolver.Avalonia.exe`
+          
+          ### 🔐 文件校验
+          SHA256: ${{ env.FILE_HASH }}
+          
+          ### ⚠️ 系统要求
+          - Windows 10/11 x64
+          - 无需安装 .NET 运行时
+        files: |
+          ${{ env.RELEASE_ZIP }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -25,6 +25,9 @@ ENV/
 # Output files
 prototype/image/output/
 
+# Local publish output
+publish/
+
 # OS
 .DS_Store
 Thumbs.db
