@@ -1,6 +1,6 @@
 # Endfield Puzzle Solver
 
-终焉地理论拼图求解器 - Avalonia 跨平台版本
+终末地理论拼图求解器
 
 ## 🚀 快速开始
 
@@ -103,31 +103,6 @@ endfield-puzzle-solver/
 # 4. 计算 SHA256 哈希
 # 5. 询问是否运行测试
 ```
-
-## 📊 发布包信息
-
-- **大小**: ~38 MB (压缩), ~93 MB (解压)
-- **文件数**: 13 个文件
-- **不包含**: 
-  - ❌ FFmpeg 视频库（27 MB）- 未使用
-  - ❌ 调试符号文件（.pdb）
-  - ❌ XML 文档文件
-
-## ⚠️ 重要说明
-
-### WinUI3 版本已弃用
-
-WinUI3 版本因与 Native AOT 不兼容，无法正常运行，已停止维护。推荐使用 Avalonia 版本。
-
-### OpenCV FFmpeg 说明
-
-项目仅使用 OpenCV 的图像处理功能（`ImRead`, `MatchTemplate` 等），**不需要 FFmpeg 视频库**。发布版本已移除 `opencv_videoio_ffmpeg4110_64.dll` 以减小体积。
-
-## 📚 文档
-
-- **需求文档**: [HeChu-docs/](HeChu-docs/)
-- **发布指南**: [HeChu-docs/RELEASE.md](HeChu-docs/RELEASE.md)
-- **快速参考**: [HeChu-docs/RELEASE-QUICK.md](HeChu-docs/RELEASE-QUICK.md)
 
 ## 🤝 贡献
 
