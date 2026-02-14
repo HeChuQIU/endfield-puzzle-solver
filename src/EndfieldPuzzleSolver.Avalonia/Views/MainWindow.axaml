@@ -15,10 +15,10 @@
   <Grid RowDefinitions="Auto,*,Auto">
     <!-- 工具栏 -->
     <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8">
-      <StackPanel Orientation="Horizontal" Spacing="8">
+      <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
         <Button Command="{Binding OpenScreenshotCommand}" HorizontalContentAlignment="Center">
           <StackPanel Orientation="Horizontal" Spacing="8">
-            <PathIcon Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" Width="16" Height="16" />
+            <PathIcon Data="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z" Width="16" Height="16" />
             <TextBlock Text="打开截图" />
           </StackPanel>
         </Button>
@@ -55,17 +55,7 @@
               <StackPanel x:Name="PuzzleInfoPanel" IsVisible="{Binding HasPuzzle}">
                 <TextBlock x:Name="GridSizeText" Text="网格大小: - × -" />
                 <TextBlock Text="颜色组:" FontWeight="SemiBold" Margin="0,12,0,4" />
-                <ItemsControl x:Name="ColorGroupsItems" ItemsSource="{Binding PuzzleData.ColorGroups}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="models:ColorGroupInfo">
-                      <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
-                        <Border Width="16" Height="16" CornerRadius="2"
-                                Background="Gray" />
-                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
-                      </StackPanel>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                <ItemsControl x:Name="ColorGroupsItems" />
               </StackPanel>
               <TextBlock x:Name="PlaceholderText" Text="请打开截图或拖入图片加载谜题" TextWrapping="Wrap"
                          IsVisible="{Binding !HasPuzzle}" />
@@ -78,15 +68,7 @@
                   BorderThickness="1" CornerRadius="8" Margin="8" Padding="16">
             <StackPanel>
               <TextBlock Text="元件列表" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
-              <ItemsControl x:Name="ComponentsItems" ItemsSource="{Binding PuzzleData.Components}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="models:ComponentInfo">
-                    <StackPanel Margin="0,4">
-                      <TextBlock Text="{Binding ColorGroup, StringFormat='元件: {0}'}" FontWeight="SemiBold" />
-                    </StackPanel>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+              <ItemsControl x:Name="ComponentsItems" />
             </StackPanel>
           </Border>
         </StackPanel>
@@ -95,7 +77,14 @@
 
     <!-- 状态栏 -->
     <Border Grid.Row="2" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="12,8">
-      <TextBlock x:Name="StatusTextBlock" Text="{Binding StatusMessage}" />
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Border x:Name="StatusIcon" Width="20" Height="20" CornerRadius="10"
+                Background="#0078D4">
+          <TextBlock Text="ℹ" Foreground="White" FontSize="12"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
+        <TextBlock x:Name="StatusTextBlock" Text="{Binding StatusMessage}" VerticalAlignment="Center" />
+      </StackPanel>
     </Border>
   </Grid>
 </Window>

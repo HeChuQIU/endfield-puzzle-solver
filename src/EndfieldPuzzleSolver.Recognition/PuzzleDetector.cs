@@ -940,7 +940,8 @@ public sealed class PuzzleDetector
         if (avgV < _config.ComponentDetection.MinAvgValue)
             return null;
 
-        var colorGroup = _colorGrouper.MatchNearest(avgH, avgS, avgV);
+        var groupIdx = _colorGrouper.Register(avgH, avgS, avgV);
+        var colorGroup = ColorGrouper.Label(groupIdx);
         var shapeBool = new bool[bestShape.Length, bestShape[0].Length];
         for (int r = 0; r < bestShape.Length; r++)
             for (int c = 0; c < bestShape[r].Length; c++)

@@ -142,6 +142,8 @@ public partial class MainWindow : Window
         if (vm.PuzzleData == null)
         {
             GridSizeText.Text = "网格大小: - × -";
+            ColorGroupsItems.Items.Clear();
+            ComponentsItems.Items.Clear();
             PuzzleInfoPanel.IsVisible = false;
             PlaceholderText.IsVisible = true;
             return;
@@ -152,6 +154,77 @@ public partial class MainWindow : Window
 
         var p = vm.PuzzleData;
         GridSizeText.Text = $"网格大小: {p.Rows} × {p.Cols}";
+
+        // 颜色组：显示实际颜色 + HSV 值
+        ColorGroupsItems.Items.Clear();
+        foreach (var cg in p.ColorGroups)
+        {
+            var brush = HsvToBrush(cg.Hue, cg.Saturation, cg.Value);
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            panel.Children.Add(new Border
+            {
+                Width = 16,
+                Height = 16,
+                CornerRadius = new CornerRadius(2),
+                Background = brush,
+                BorderBrush = Brushes.Gray,
+                BorderThickness = new Thickness(1)
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"{cg.Label} (H{cg.Hue} S{cg.Saturation} V{cg.Value})",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            ColorGroupsItems.Items.Add(panel);
+        }
+
+        // 元件列表：编号 + 颜色组 + 格数 + 形状可视化
+        ComponentsItems.Items.Clear();
+        for (int i = 0; i < p.Components.Length; i++)
+        {
+            var comp = p.Components[i];
+            var brush = GetColorGroupBrush(p, comp.ColorGroup);
+
+            var label = new TextBlock
+            {
+                Text = $"元件 {i + 1}: {comp.ColorGroup} ({comp.TileCount} 格)",
+                Foreground = brush,
+                Margin = new Thickness(0, 4, 0, 2)
+            };
+
+            // 用小方格矩阵绘制元件形状
+            var shapeCanvas = new Canvas
+            {
+                Width = comp.Cols * ShapeCellSize,
+                Height = comp.Rows * ShapeCellSize,
+                Margin = new Thickness(4, 0, 0, 4)
+            };
+            for (int sr = 0; sr < comp.Rows; sr++)
+            {
+                for (int sc = 0; sc < comp.Cols; sc++)
+                {
+                    if (comp.Shape[sr, sc])
+                    {
+                        var cell = new Rectangle
+                        {
+                            Width = ShapeCellSize - 1,
+                            Height = ShapeCellSize - 1,
+                            Fill = brush,
+                            Stroke = Brushes.Black,
+                            StrokeThickness = 0.5
+                        };
+                        Canvas.SetLeft(cell, sc * ShapeCellSize);
+                        Canvas.SetTop(cell, sr * ShapeCellSize);
+                        shapeCanvas.Children.Add(cell);
+                    }
+                }
+            }
+
+            var container = new StackPanel();
+            container.Children.Add(label);
+            container.Children.Add(shapeCanvas);
+            ComponentsItems.Items.Add(container);
+        }
     }
 
     private void DrawBoard()
