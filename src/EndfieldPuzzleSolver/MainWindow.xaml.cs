@@ -24,6 +24,7 @@ public sealed partial class MainWindow : Window
 
         // 设置文件选择回调
         ViewModel.PickImageAsync = PickImageAsync;
+        ViewModel.GetClipboardImagePathAsync = GetClipboardImagePathAsync;
         ViewModel.BoardSnapshotChanged += OnBoardSnapshotChanged;
 
         RootGrid.Loaded += (_, _) =>
@@ -33,6 +34,15 @@ public sealed partial class MainWindow : Window
         };
 
         OpenScreenshotBtn.Click += async (_, _) => await ViewModel.OpenScreenshotAsync();
+        PasteClipboardBtn.Click += async (_, _) => await ViewModel.PasteFromClipboardAsync();
+
+        // 支持 Ctrl+V 快捷键粘贴
+        RootGrid.KeyboardAccelerators.Add(new Microsoft.UI.Xaml.Input.KeyboardAccelerator
+        {
+            Key = Windows.System.VirtualKey.V,
+            Modifiers = Windows.System.VirtualKeyModifiers.Control
+        });
+        RootGrid.KeyboardAccelerators[^1].Invoked += async (_, _) => await ViewModel.PasteFromClipboardAsync();
 
         ViewModel.PropertyChanged += (_, e) =>
         {
@@ -58,6 +68,58 @@ public sealed partial class MainWindow : Window
     }
 
     private static readonly HashSet<string> SupportedImageExtensions = [".png", ".jpg", ".jpeg"];
+
+    private async Task<string?> GetClipboardImagePathAsync()
+    {
+        var content = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+
+        // 优先尝试获取剪贴板中的位图（截图）
+        if (content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap))
+        {
+            try
+            {
+                var reference = await content.GetBitmapAsync();
+                using var stream = await reference.OpenReadAsync();
+                
+                // 使用 BitmapDecoder 解码位图，然后用 BitmapEncoder 编码为 PNG
+                var decoder = await Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream);
+                var softwareBitmap = await decoder.GetSoftwareBitmapAsync();
+                
+                var tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"endfield_clipboard_{DateTime.Now:yyyyMMddHHmmss}.png");
+                using var fileStream = File.Create(tempPath);
+                var randomAccessStream = fileStream.AsRandomAccessStream();
+                
+                var encoder = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
+                    Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, 
+                    randomAccessStream);
+                    
+                encoder.SetSoftwareBitmap(softwareBitmap);
+                await encoder.FlushAsync();
+                
+                return tempPath;
+            }
+            catch
+            {
+                // 如果位图解码失败，继续尝试其他方式
+            }
+        }
+
+        // 其次尝试获取剪贴板中复制的图片文件
+        if (content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            var items = await content.GetStorageItemsAsync();
+            foreach (var item in items)
+            {
+                if (item is Windows.Storage.StorageFile file &&
+                    SupportedImageExtensions.Contains(file.FileType.ToLowerInvariant()))
+                {
+                    return file.Path;
+                }
+            }
+        }
+
+        return null;
+    }
 
     private void BoardDropArea_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
     {
@@ -99,11 +161,13 @@ public sealed partial class MainWindow : Window
             ComponentsItems.Items.Clear();
             PuzzleInfoPanel.Visibility = Visibility.Collapsed;
             PlaceholderText.Visibility = Visibility.Visible;
+            BoardPlaceholder.Visibility = Visibility.Visible;
             return;
         }
 
         PuzzleInfoPanel.Visibility = Visibility.Visible;
         PlaceholderText.Visibility = Visibility.Collapsed;
+        BoardPlaceholder.Visibility = Visibility.Collapsed;
         var p = vm.PuzzleData;
         GridSizeText.Text = $"网格大小: {p.Rows} × {p.Cols}";
 

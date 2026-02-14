@@ -26,6 +26,12 @@ public partial class MainViewModel : ObservableObject
     /// </summary>
     public Func<Task<string?>>? PickImageAsync { get; set; }
 
+    /// <summary>
+    /// 由 View 层设置，用于从剪贴板获取图片并保存为临时文件，返回路径。
+    /// 返回 null 表示剪贴板中没有图片。
+    /// </summary>
+    public Func<Task<string?>>? GetClipboardImagePathAsync { get; set; }
+
     [ObservableProperty]
     private PuzzleData? _puzzleData;
 
@@ -97,6 +103,38 @@ public partial class MainViewModel : ObservableObject
         var path = PickImageAsync != null ? await PickImageAsync() : null;
         if (path != null)
             await LoadFromScreenshotAsync(path);
+    }
+
+    [RelayCommand]
+    public async Task PasteFromClipboardAsync()
+    {
+        if (GetClipboardImagePathAsync == null)
+        {
+            StatusMessage = "当前平台不支持剪贴板粘贴";
+            return;
+        }
+
+        IsLoading = true;
+        StatusMessage = "正在从剪贴板读取图片...";
+        try
+        {
+            var path = await GetClipboardImagePathAsync();
+            if (path == null)
+            {
+                StatusMessage = "剪贴板中没有图片";
+                return;
+            }
+
+            await LoadFromScreenshotAsync(path);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"粘贴失败: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+        }
     }
 
     [RelayCommand(CanExecute = nameof(HasPuzzle))]

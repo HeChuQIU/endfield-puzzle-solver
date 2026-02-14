@@ -40,6 +40,7 @@ public partial class MainWindow : Window
 
         // 设置文件选择回调
         ViewModel.PickImageAsync = PickImageAsync;
+        ViewModel.GetClipboardImagePathAsync = GetClipboardImagePathAsync;
         ViewModel.BoardSnapshotChanged += OnBoardSnapshotChanged;
 
         // 属性变更监听
@@ -47,6 +48,17 @@ public partial class MainWindow : Window
         {
             if (e.PropertyName == nameof(MainViewModel.StatusMessage))
                 StatusTextBlock.Text = ViewModel.StatusMessage;
+        };
+
+        // 支持 Ctrl+V 快捷键粘贴
+        KeyDown += async (_, e) =>
+        {
+            if (e.Key == global::Avalonia.Input.Key.V &&
+                e.KeyModifiers.HasFlag(global::Avalonia.Input.KeyModifiers.Control))
+            {
+                await ViewModel.PasteFromClipboardAsync();
+                e.Handled = true;
+            }
         };
 
         Loaded += (_, _) =>
@@ -90,6 +102,65 @@ public partial class MainWindow : Window
 
         var file = files.FirstOrDefault();
         return file?.Path.LocalPath;
+    }
+
+    private async Task<string?> GetClipboardImagePathAsync()
+    {
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard == null) return null;
+
+        try
+        {
+            var formats = await clipboard.GetFormatsAsync();
+
+            // 尝试获取剪贴板中的图片数据（截图）
+            foreach (var format in new[] { "PNG", "image/png", "image/bmp", "image/jpeg" })
+            {
+                if (!formats.Contains(format)) continue;
+                var data = await clipboard.GetDataAsync(format);
+                if (data is byte[] bytes && bytes.Length > 0)
+                {
+                    var ext = format.Contains("png") || format == "PNG" ? ".png" : ".bmp";
+                    var tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"endfield_clipboard_{DateTime.Now:yyyyMMddHHmmss}{ext}");
+                    await File.WriteAllBytesAsync(tempPath, bytes);
+                    return tempPath;
+                }
+                if (data is Stream stream && stream.Length > 0)
+                {
+                    var ext = format.Contains("png") || format == "PNG" ? ".png" : ".bmp";
+                    var tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"endfield_clipboard_{DateTime.Now:yyyyMMddHHmmss}{ext}");
+                    await using var fs = File.Create(tempPath);
+                    stream.Position = 0;
+                    await stream.CopyToAsync(fs);
+                    return tempPath;
+                }
+            }
+
+            // 尝试获取剪贴板中复制的图片文件
+            if (formats.Contains(DataFormats.Files))
+            {
+                var data = await clipboard.GetDataAsync(DataFormats.Files);
+                if (data is IEnumerable<IStorageItem> files)
+                {
+                    foreach (var f in files)
+                    {
+                        if (f is IStorageFile storageFile)
+                        {
+                            var path = storageFile.Path.LocalPath;
+                            var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+                            if (SupportedImageExtensions.Contains(ext))
+                                return path;
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // 剪贴板访问可能失败
+        }
+
+        return null;
     }
 
     private void OnDragOver(object? sender, DragEventArgs e)
@@ -146,11 +217,13 @@ public partial class MainWindow : Window
             ComponentsItems.Items.Clear();
             PuzzleInfoPanel.IsVisible = false;
             PlaceholderText.IsVisible = true;
+            BoardPlaceholder.IsVisible = true;
             return;
         }
 
         PuzzleInfoPanel.IsVisible = true;
         PlaceholderText.IsVisible = false;
+        BoardPlaceholder.IsVisible = false;
 
         var p = vm.PuzzleData;
         GridSizeText.Text = $"网格大小: {p.Rows} × {p.Cols}";

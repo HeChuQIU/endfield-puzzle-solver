@@ -20,6 +20,11 @@
 
         <CommandBar Grid.Row="0" DefaultLabelPosition="Right">
             <AppBarButton x:Name="OpenScreenshotBtn" Icon="OpenFile" Label="打开截图" />
+            <AppBarButton x:Name="PasteClipboardBtn" Label="粘贴截图">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE77F;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
         </CommandBar>
 
         <Grid Grid.Row="1">
@@ -38,8 +43,15 @@
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Text="谜题主体" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
                         <Border Grid.Row="1" BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" CornerRadius="4" Padding="8"
-                                Background="{StaticResource CanvasBackground}">
-                            <Canvas x:Name="BoardCanvas" />
+                                Background="{StaticResource CanvasBackground}" MinHeight="300">
+                            <Grid>
+                                <Canvas x:Name="BoardCanvas" />
+                                <StackPanel x:Name="BoardPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
+                                    <FontIcon Glyph="&#xE8B9;" FontSize="48" HorizontalAlignment="Center" Opacity="0.4" />
+                                    <TextBlock Text="拖入截图以加载谜题" FontSize="16" HorizontalAlignment="Center" Opacity="0.6" TextWrapping="Wrap" />
+                                    <TextBlock Text="或使用顶部工具栏粘贴截图" FontSize="14" HorizontalAlignment="Center" Opacity="0.5" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Grid>
                         </Border>
                     </Grid>
                 </Border>
