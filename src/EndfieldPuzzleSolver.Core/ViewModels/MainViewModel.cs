@@ -5,10 +5,11 @@ using EndfieldPuzzleSolver.Recognition.Models;
 using EndfieldPuzzleSolver.Recognition.Config;
 using Microsoft.Extensions.Configuration;
 
-namespace EndfieldPuzzleSolver.ViewModels;
+namespace EndfieldPuzzleSolver.Core.ViewModels;
 
 /// <summary>
 /// 主窗口的 ViewModel，使用 CommunityToolkit.Mvvm 的源生成器。
+/// 平台无关的核心逻辑，由各平台 View 层注入 PickImageAsync 回调。
 /// </summary>
 public partial class MainViewModel : ObservableObject
 {
@@ -21,7 +22,7 @@ public partial class MainViewModel : ObservableObject
         ?? new DetectionConfig();
 
     /// <summary>
-    /// 由 MainWindow 设置，用于选择图片文件。
+    /// 由 View 层设置，用于选择图片文件。
     /// </summary>
     public Func<Task<string?>>? PickImageAsync { get; set; }
 
@@ -54,7 +55,7 @@ public partial class MainViewModel : ObservableObject
     public string StepNavigationText => TotalSteps > 0 ? $"步骤 {CurrentStepIndex + 1} / {TotalSteps}" : "步骤 0 / 0";
 
     /// <summary>
-    /// 当需要重绘棋盘时触发（由 code-behind 订阅）。
+    /// 当需要重绘棋盘时触发（由 View 层订阅）。
     /// </summary>
     public event EventHandler? BoardSnapshotChanged;
 

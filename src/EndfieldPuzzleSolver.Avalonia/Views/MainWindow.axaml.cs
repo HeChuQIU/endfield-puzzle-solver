@@ -1,14 +1,21 @@
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Shapes;
-using WinRT.Interop;
-using EndfieldPuzzleSolver.Recognition.Models;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using EndfieldPuzzleSolver.Core.ViewModels;
+using EndfieldPuzzleSolver.Recognition.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 
-namespace EndfieldPuzzleSolver;
+namespace EndfieldPuzzleSolver.Avalonia.Views;
 
-public sealed partial class MainWindow : Window
+public partial class MainWindow : Window
 {
     public MainViewModel ViewModel { get; } = new();
 
@@ -16,69 +23,109 @@ public sealed partial class MainWindow : Window
     private const double RequirementMargin = 24;
     private const double ShapeCellSize = 14;
 
+    private static readonly HashSet<string> SupportedImageExtensions = [".png", ".jpg", ".jpeg"];
+
     public MainWindow()
     {
         InitializeComponent();
-        SystemBackdrop = new Microsoft.UI.Xaml.Media.MicaBackdrop();
+        
+        // 设置 DataContext
+        DataContext = ViewModel;
 
+        // 启用拖拽（Window 级别）
+        AddHandler(DragDrop.DragEnterEvent, OnDragEnter);
+        AddHandler(DragDrop.DragLeaveEvent, OnDragLeave);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DropEvent, OnDrop);
 
         // 设置文件选择回调
         ViewModel.PickImageAsync = PickImageAsync;
         ViewModel.BoardSnapshotChanged += OnBoardSnapshotChanged;
 
-        RootGrid.Loaded += (_, _) =>
+        // 属性变更监听
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.StatusMessage))
+                StatusTextBlock.Text = ViewModel.StatusMessage;
+        };
+
+        Loaded += (_, _) =>
         {
             UpdatePuzzleInfo();
             DrawBoard();
         };
+    }
 
-        OpenScreenshotBtn.Click += async (_, _) => await ViewModel.OpenScreenshotAsync();
-
-        ViewModel.PropertyChanged += (_, e) =>
+    private void OnDragEnter(object? sender, DragEventArgs e)
+    {
+        if (e.Data.Contains(DataFormats.Files))
         {
-            if (e.PropertyName is nameof(MainViewModel.StatusMessage))
-                StatusInfoBar.Message = ViewModel.StatusMessage;
-        };
+            e.DragEffects = DragDropEffects.Copy;
+        }
+        else
+        {
+            e.DragEffects = DragDropEffects.None;
+        }
+    }
+
+    private void OnDragLeave(object? sender, DragEventArgs e)
+    {
+        // 拖拽离开时的处理（可选）
     }
 
     private async Task<string?> PickImageAsync()
     {
-        var picker = new Windows.Storage.Pickers.FileOpenPicker
+        var storage = GetTopLevel(this)?.StorageProvider;
+        if (storage == null) return null;
+
+        var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.PicturesLibrary
-        };
-        picker.FileTypeFilter.Add(".png");
-        picker.FileTypeFilter.Add(".jpg");
-        picker.FileTypeFilter.Add(".jpeg");
-
-        var hwnd = WindowNative.GetWindowHandle(this);
-        InitializeWithWindow.Initialize(picker, hwnd);
-        var file = await picker.PickSingleFileAsync();
-        return file?.Path;
-    }
-
-    private static readonly HashSet<string> SupportedImageExtensions = [".png", ".jpg", ".jpeg"];
-
-    private void BoardDropArea_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
-    {
-        e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
-        e.DragUIOverride.Caption = "加载截图";
-        e.DragUIOverride.IsCaptionVisible = true;
-    }
-
-    private async void BoardDropArea_Drop(object sender, Microsoft.UI.Xaml.DragEventArgs e)
-    {
-        if (!e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
-            return;
-
-        var items = await e.DataView.GetStorageItemsAsync();
-        foreach (var item in items)
-        {
-            if (item is Windows.Storage.StorageFile file &&
-                SupportedImageExtensions.Contains(file.FileType.ToLowerInvariant()))
+            Title = "选择截图",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
             {
-                await ViewModel.LoadFromScreenshotAsync(file.Path);
-                return; // 只处理第一个有效图片
+                new FilePickerFileType("图片文件") { Patterns = new[] { "*.png", "*.jpg", "*.jpeg" } }
+            }
+        });
+
+        var file = files.FirstOrDefault();
+        return file?.Path.LocalPath;
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        // 必须设置 DragEffects 才能接受拖拽
+        if (e.Data.Contains(DataFormats.Files))
+        {
+            e.DragEffects = DragDropEffects.Copy;
+        }
+        else
+        {
+            e.DragEffects = DragDropEffects.None;
+        }
+    }
+
+    private async void OnDrop(object? sender, DragEventArgs e)
+    {
+        if (!e.Data.Contains(DataFormats.Files))
+        {
+            e.DragEffects = DragDropEffects.None;
+            return;
+        }
+
+        var files = e.Data.GetFiles();
+        if (files == null) return;
+        
+        foreach (var file in files)
+        {
+            if (file is not IStorageFile storageFile) continue;
+            
+            var path = storageFile.Path.LocalPath;
+            var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+            if (SupportedImageExtensions.Contains(ext))
+            {
+                await ViewModel.LoadFromScreenshotAsync(path);
+                return;
             }
         }
     }
@@ -95,83 +142,16 @@ public sealed partial class MainWindow : Window
         if (vm.PuzzleData == null)
         {
             GridSizeText.Text = "网格大小: - × -";
-            ColorGroupsItems.Items.Clear();
-            ComponentsItems.Items.Clear();
-            PuzzleInfoPanel.Visibility = Visibility.Collapsed;
-            PlaceholderText.Visibility = Visibility.Visible;
+            PuzzleInfoPanel.IsVisible = false;
+            PlaceholderText.IsVisible = true;
             return;
         }
 
-        PuzzleInfoPanel.Visibility = Visibility.Visible;
-        PlaceholderText.Visibility = Visibility.Collapsed;
+        PuzzleInfoPanel.IsVisible = true;
+        PlaceholderText.IsVisible = false;
+
         var p = vm.PuzzleData;
         GridSizeText.Text = $"网格大小: {p.Rows} × {p.Cols}";
-
-        ColorGroupsItems.Items.Clear();
-        foreach (var cg in p.ColorGroups)
-        {
-            var brush = HsvToBrush(cg.Hue, cg.Saturation, cg.Value);
-            var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            panel.Children.Add(new Border
-            {
-                Width = 16,
-                Height = 16,
-                CornerRadius = new CornerRadius(2),
-                Background = brush,
-                BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Gray),
-                BorderThickness = new Thickness(1)
-            });
-            panel.Children.Add(new TextBlock { Text = $"{cg.Label} (H{cg.Hue} S{cg.Saturation} V{cg.Value})", VerticalAlignment = VerticalAlignment.Center });
-            ColorGroupsItems.Items.Add(panel);
-        }
-
-        ComponentsItems.Items.Clear();
-        for (int i = 0; i < p.Components.Length; i++)
-        {
-            var comp = p.Components[i];
-            var brush = GetColorGroupBrush(p, comp.ColorGroup);
-
-            // 元件标签
-            var label = new TextBlock
-            {
-                Text = $"元件 {i + 1}: {comp.ColorGroup} ({comp.TileCount} 格)",
-                Foreground = brush,
-                Margin = new Thickness(0, 4, 0, 2)
-            };
-
-            // 用小方格矩阵绘制元件原始形状
-            var shapeCanvas = new Canvas
-            {
-                Width = comp.Cols * ShapeCellSize,
-                Height = comp.Rows * ShapeCellSize,
-                Margin = new Thickness(4, 0, 0, 4)
-            };
-            for (int sr = 0; sr < comp.Rows; sr++)
-            {
-                for (int sc = 0; sc < comp.Cols; sc++)
-                {
-                    if (comp.Shape[sr, sc])
-                    {
-                        var cell = new Rectangle
-                        {
-                            Width = ShapeCellSize - 1,
-                            Height = ShapeCellSize - 1,
-                            Fill = brush,
-                            Stroke = new SolidColorBrush(Microsoft.UI.Colors.Black),
-                            StrokeThickness = 0.5
-                        };
-                        Canvas.SetLeft(cell, sc * ShapeCellSize);
-                        Canvas.SetTop(cell, sr * ShapeCellSize);
-                        shapeCanvas.Children.Add(cell);
-                    }
-                }
-            }
-
-            var container = new StackPanel();
-            container.Children.Add(label);
-            container.Children.Add(shapeCanvas);
-            ComponentsItems.Items.Add(container);
-        }
     }
 
     private void DrawBoard()
@@ -188,7 +168,7 @@ public sealed partial class MainWindow : Window
         double gridW = cols * TileSize + 2 * RequirementMargin;
         double gridH = rows * TileSize + 2 * RequirementMargin;
 
-        // 绘制行需求（左侧）—— 显示 "已满足/总数" 格式
+        // 绘制行需求（左侧）
         for (int r = 0; r < rows; r++)
         {
             var reqs = puzzle.RowRequirements[r];
@@ -196,15 +176,12 @@ public sealed partial class MainWindow : Window
             double x = RequirementMargin / 2;
             foreach (var req in reqs)
             {
-                // 动态计算当前已满足数：统计当前快照中该行该颜色的 Lock 格子数
                 int currentFilled = CountColorInRow(snapshot, r, req.ColorGroup);
                 var tb = new TextBlock
                 {
                     Text = $"{currentFilled}/{req.Count}",
                     Foreground = GetColorGroupBrush(puzzle, req.ColorGroup),
                     FontSize = 11,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
                 };
                 Canvas.SetLeft(tb, x - 14);
                 Canvas.SetTop(tb, y - 8);
@@ -213,7 +190,7 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        // 绘制列需求（上方）—— 显示 "已满足/总数" 格式
+        // 绘制列需求（上方）
         for (int c = 0; c < cols; c++)
         {
             var reqs = puzzle.ColumnRequirements[c];
@@ -227,8 +204,6 @@ public sealed partial class MainWindow : Window
                     Text = $"{currentFilled}/{req.Count}",
                     Foreground = GetColorGroupBrush(puzzle, req.ColorGroup),
                     FontSize = 11,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
                 };
                 Canvas.SetLeft(tb, x - 14);
                 Canvas.SetTop(tb, y - 8);
@@ -237,7 +212,7 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        // 第一遍：绘制所有格子的填充色（无边框）
+        // 第一遍：绘制所有格子的填充色
         for (int r = 0; r < rows; r++)
         {
             for (int c = 0; c < cols; c++)
@@ -246,16 +221,21 @@ public sealed partial class MainWindow : Window
                 double left = RequirementMargin + c * TileSize;
                 double top = RequirementMargin + r * TileSize;
 
-                SolidColorBrush? fill = tile.Type switch
+                IBrush? fill = tile.Type switch
                 {
-                    TileType.Disabled => new SolidColorBrush(Microsoft.UI.Colors.DarkGray),
+                    TileType.Disabled => Brushes.DarkGray,
                     TileType.Lock when tile.ColorGroup != null => GetColorGroupBrush(puzzle, tile.ColorGroup),
                     _ => null
                 };
 
                 if (fill != null)
                 {
-                    var rect = new Rectangle { Width = TileSize, Height = TileSize, Fill = fill };
+                    var rect = new Rectangle
+                    {
+                        Width = TileSize,
+                        Height = TileSize,
+                        Fill = fill
+                    };
                     Canvas.SetLeft(rect, left);
                     Canvas.SetTop(rect, top);
                     BoardCanvas.Children.Add(rect);
@@ -266,11 +246,12 @@ public sealed partial class MainWindow : Window
                 {
                     var symbol = new TextBlock
                     {
-                        Text = "⊘", FontSize = 18,
-                        Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
-                        Width = TileSize, Height = TileSize,
+                        Text = "⊘",
+                        FontSize = 18,
+                        Foreground = Brushes.White,
+                        Width = TileSize,
+                        Height = TileSize,
                         TextAlignment = TextAlignment.Center,
-                        HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     Canvas.SetLeft(symbol, left);
@@ -281,10 +262,11 @@ public sealed partial class MainWindow : Window
                 {
                     var lockTb = new TextBlock
                     {
-                        Text = "🔒", FontSize = 14,
-                        Width = TileSize, Height = TileSize,
+                        Text = "🔒",
+                        FontSize = 14,
+                        Width = TileSize,
+                        Height = TileSize,
                         TextAlignment = TextAlignment.Center,
-                        HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     Canvas.SetLeft(lockTb, left);
@@ -294,9 +276,9 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        // 第二遍：绘制边框线（同一元件内部不画）
-        var borderBrushDark = new SolidColorBrush(Microsoft.UI.Colors.Black);
-        var borderBrushLight = new SolidColorBrush(Microsoft.UI.Colors.DarkGray);
+        // 第二遍：绘制边框线
+        var borderBrushDark = Brushes.Black;
+        var borderBrushLight = Brushes.DarkGray;
 
         for (int r = 0; r < rows; r++)
         {
@@ -313,19 +295,19 @@ public sealed partial class MainWindow : Window
                     _ => borderBrushDark
                 };
 
-                // 上边框：无上邻居 或 上邻居不是同一元件
+                // 上边框
                 if (r == 0 || !IsSameComponent(tile, snapshot[r - 1, c]))
                     AddBorderLine(left, top, left + TileSize, top, strokeBrush);
 
-                // 左边框：无左邻居 或 左邻居不是同一元件
+                // 左边框
                 if (c == 0 || !IsSameComponent(tile, snapshot[r, c - 1]))
                     AddBorderLine(left, top, left, top + TileSize, strokeBrush);
 
-                // 下边框：最后一行 或 下邻居不是同一元件
+                // 下边框
                 if (r == rows - 1 || !IsSameComponent(tile, snapshot[r + 1, c]))
                     AddBorderLine(left, top + TileSize, left + TileSize, top + TileSize, strokeBrush);
 
-                // 右边框：最后一列 或 右邻居不是同一元件
+                // 右边框
                 if (c == cols - 1 || !IsSameComponent(tile, snapshot[r, c + 1]))
                     AddBorderLine(left + TileSize, top, left + TileSize, top + TileSize, strokeBrush);
             }
@@ -335,24 +317,21 @@ public sealed partial class MainWindow : Window
         BoardCanvas.Height = gridH;
     }
 
-    /// <summary>判断两个格子是否属于同一个已放置元件</summary>
     private static bool IsSameComponent(TileInfo a, TileInfo b)
         => a.PlacedComponentIndex >= 0 && a.PlacedComponentIndex == b.PlacedComponentIndex;
 
-    /// <summary>在 BoardCanvas 上绘制一条边框线</summary>
-    private void AddBorderLine(double x1, double y1, double x2, double y2, SolidColorBrush stroke)
+    private void AddBorderLine(double x1, double y1, double x2, double y2, IBrush stroke)
     {
         var line = new Line
         {
-            X1 = x1, Y1 = y1,
-            X2 = x2, Y2 = y2,
+            StartPoint = new Point(x1, y1),
+            EndPoint = new Point(x2, y2),
             Stroke = stroke,
             StrokeThickness = 1
         };
         BoardCanvas.Children.Add(line);
     }
 
-    /// <summary>统计棋盘快照中某行某颜色组的 Lock 格子数量</summary>
     private static int CountColorInRow(TileInfo[,] board, int row, string colorGroup)
     {
         int count = 0;
@@ -366,7 +345,6 @@ public sealed partial class MainWindow : Window
         return count;
     }
 
-    /// <summary>统计棋盘快照中某列某颜色组的 Lock 格子数量</summary>
     private static int CountColorInCol(TileInfo[,] board, int col, string colorGroup)
     {
         int count = 0;
@@ -380,24 +358,18 @@ public sealed partial class MainWindow : Window
         return count;
     }
 
-    private static SolidColorBrush GetColorGroupBrush(PuzzleData puzzle, string colorGroup)
+    private static IBrush GetColorGroupBrush(PuzzleData puzzle, string colorGroup)
     {
         var cg = puzzle.ColorGroups.FirstOrDefault(x => x.Label == colorGroup);
         if (cg != null)
             return HsvToBrush(cg.Hue, cg.Saturation, cg.Value);
-        return new SolidColorBrush(Microsoft.UI.Colors.Gray);
+        return Brushes.Gray;
     }
 
-    /// <summary>
-    /// HSV 转 RGB 画笔。
-    /// H: OpenCV 范围 0-180（自动转换为 0-360）
-    /// S: OpenCV 范围 0-255（自动转换为 0-100）
-    /// V: OpenCV 范围 0-255（自动转换为 0-100）
-    /// </summary>
-    private static SolidColorBrush HsvToBrush(int h, int s, int v)
+    private static IBrush HsvToBrush(int h, int s, int v)
     {
         var (r, g, b) = HsvToRgb(h, s, v);
-        return new SolidColorBrush(Windows.UI.Color.FromArgb(255, r, g, b));
+        return new SolidColorBrush(Color.FromRgb(r, g, b));
     }
 
     private static (byte R, byte G, byte B) HsvToRgb(int h, int s, int v)

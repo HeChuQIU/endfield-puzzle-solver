@@ -4,6 +4,15 @@
 
 ---
 
+## REQ-019: 新增 Avalonia 跨平台 UI 版本
+
+- [2026-02-14] 创建需求
+- [2026-02-14] 完成开发：创建 Core 项目共享 ViewModel，新增 Avalonia 项目使用 Fluent 主题，实现与 WinUI 3 功能一致的 UI（打开截图、拖拽加载、Canvas 绘制棋盘），两个项目均编译通过
+- [2026-02-14] 修复 Avalonia 版本：添加 UiTemplates 模板文件、修复 DataContext 绑定、修复拖拽事件处理
+- [2026-02-14] 配置 Native AOT 发布：启用 PublishAot、PublishSingleFile，优化输出大小约 119MB
+
+---
+
 ## REQ-018: 使用 ContentIsland 布局分离谜题组件
 
 - [2026-02-12] 创建需求

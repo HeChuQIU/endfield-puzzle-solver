@@ -1,0 +1,101 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:EndfieldPuzzleSolver.Core.ViewModels"
+        xmlns:models="using:EndfieldPuzzleSolver.Recognition.Models"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        x:Class="EndfieldPuzzleSolver.Avalonia.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        DragDrop.AllowDrop="True"
+        Title="终末地源石电路解谜器"
+        Width="1000" Height="700"
+        MinWidth="800" MinHeight="500">
+
+  <Grid RowDefinitions="Auto,*,Auto">
+    <!-- 工具栏 -->
+    <Border Grid.Row="0" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="8">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Command="{Binding OpenScreenshotCommand}" HorizontalContentAlignment="Center">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <PathIcon Data="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" Width="16" Height="16" />
+            <TextBlock Text="打开截图" />
+          </StackPanel>
+        </Button>
+      </StackPanel>
+    </Border>
+
+    <!-- 主内容区 -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,300">
+      <!-- 左侧：棋盘区域 -->
+      <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="8" Margin="8" Padding="16">
+          <Grid RowDefinitions="Auto,*">
+            <TextBlock Grid.Row="0" Text="谜题主体" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
+            <Border Grid.Row="1" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="4" Padding="8"
+                    Background="{DynamicResource LayerFillColorDefaultBrush}">
+              <Canvas x:Name="BoardCanvas" />
+            </Border>
+          </Grid>
+        </Border>
+      </ScrollViewer>
+
+      <!-- 右侧：信息面板 -->
+      <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <!-- 谜题信息卡片 -->
+          <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                  BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                  BorderThickness="1" CornerRadius="8" Margin="8" Padding="16">
+            <StackPanel>
+              <TextBlock Text="谜题信息" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
+              <StackPanel x:Name="PuzzleInfoPanel" IsVisible="{Binding HasPuzzle}">
+                <TextBlock x:Name="GridSizeText" Text="网格大小: - × -" />
+                <TextBlock Text="颜色组:" FontWeight="SemiBold" Margin="0,12,0,4" />
+                <ItemsControl x:Name="ColorGroupsItems" ItemsSource="{Binding PuzzleData.ColorGroups}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="models:ColorGroupInfo">
+                      <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
+                        <Border Width="16" Height="16" CornerRadius="2"
+                                Background="Gray" />
+                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+              <TextBlock x:Name="PlaceholderText" Text="请打开截图或拖入图片加载谜题" TextWrapping="Wrap"
+                         IsVisible="{Binding !HasPuzzle}" />
+            </StackPanel>
+          </Border>
+
+          <!-- 元件列表卡片 -->
+          <Border Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                  BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                  BorderThickness="1" CornerRadius="8" Margin="8" Padding="16">
+            <StackPanel>
+              <TextBlock Text="元件列表" FontWeight="SemiBold" FontSize="18" Margin="0,0,0,12" />
+              <ItemsControl x:Name="ComponentsItems" ItemsSource="{Binding PuzzleData.Components}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="models:ComponentInfo">
+                    <StackPanel Margin="0,4">
+                      <TextBlock Text="{Binding ColorGroup, StringFormat='元件: {0}'}" FontWeight="SemiBold" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+
+    <!-- 状态栏 -->
+    <Border Grid.Row="2" Background="{DynamicResource SystemControlBackgroundChromeMediumBrush}" Padding="12,8">
+      <TextBlock x:Name="StatusTextBlock" Text="{Binding StatusMessage}" />
+    </Border>
+  </Grid>
+</Window>
