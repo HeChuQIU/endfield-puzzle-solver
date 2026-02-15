@@ -164,7 +164,8 @@
 
         try
         {
-            var tempPath = Path.Combine(Path.GetTempPath(), $"endfield_upload_{DateTime.Now:yyyyMMddHHmmss}{ext}");
+            var tempDir = Path.GetTempPath();
+            var tempPath = Path.Combine(tempDir, $"endfield_upload_{DateTime.Now:yyyyMMddHHmmss}{ext}");
             await using (var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024))
             await using (var fs = File.Create(tempPath))
             {
@@ -172,6 +173,10 @@
             }
 
             await _viewModel.LoadFromScreenshotAsync(tempPath);
+        }
+        catch (DllNotFoundException)
+        {
+            _viewModel.StatusMessage = "浏览器环境不支持图像识别（需要 OpenCV 本地库），请使用桌面版本";
         }
         catch (Exception ex)
         {
@@ -199,9 +204,14 @@
                 return;
             }
 
-            var tempPath = Path.Combine(Path.GetTempPath(), $"endfield_clipboard_{DateTime.Now:yyyyMMddHHmmss}.png");
+            var tempDir = Path.GetTempPath();
+            var tempPath = Path.Combine(tempDir, $"endfield_clipboard_{DateTime.Now:yyyyMMddHHmmss}.png");
             await File.WriteAllBytesAsync(tempPath, imageBytes);
             await _viewModel.LoadFromScreenshotAsync(tempPath);
+        }
+        catch (DllNotFoundException)
+        {
+            _viewModel.StatusMessage = "浏览器环境不支持图像识别（需要 OpenCV 本地库），请使用桌面版本";
         }
         catch (Exception ex)
         {
