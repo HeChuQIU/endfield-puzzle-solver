@@ -1,0 +1,247 @@
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    color: #1a1a1a;
+    background: #f3f3f3;
+}
+
+.app-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+/* Toolbar */
+.toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #e0e0e0;
+    padding: 8px 16px;
+    flex-shrink: 0;
+}
+
+.toolbar-title {
+    font-weight: 600;
+    font-size: 16px;
+}
+
+.toolbar-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.15s;
+}
+
+.btn:hover {
+    background: #e8e8e8;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: #0078d4;
+    color: #fff;
+    border-color: #0078d4;
+}
+
+.btn-primary:hover {
+    background: #106ebe;
+}
+
+/* Main layout */
+.main-content {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 0;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* Cards */
+.card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin: 8px;
+    padding: 16px;
+}
+
+.card-title {
+    font-weight: 600;
+    font-size: 18px;
+    margin: 0 0 12px 0;
+}
+
+/* Board area */
+.board-area {
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.board-container {
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 8px;
+    background: #fafafa;
+    min-height: 300px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.board-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    opacity: 0.6;
+}
+
+.board-placeholder svg {
+    width: 48px;
+    height: 48px;
+    opacity: 0.4;
+}
+
+/* Info panel */
+.info-panel {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Color swatch */
+.color-swatch {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 2px;
+    border: 1px solid #999;
+    vertical-align: middle;
+    margin-right: 8px;
+}
+
+.color-group-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+/* Component item */
+.component-item {
+    margin-bottom: 8px;
+}
+
+.component-label {
+    margin-bottom: 2px;
+}
+
+/* Step navigation */
+.step-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* Status bar */
+.status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #e0e0e0;
+    padding: 8px 16px;
+    flex-shrink: 0;
+}
+
+.status-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 10px;
+    background: #0078d4;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+/* Drop zone highlight */
+.drop-zone-active {
+    background: #e3f2fd !important;
+    border-color: #0078d4 !important;
+}
+
+/* Loading overlay */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    border-radius: 4px;
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #ccc;
+    border-top-color: #0078d4;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* File input hidden */
+.file-input-hidden {
+    display: none;
+}
+
+/* SVG board */
+.board-svg text {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .main-content {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr auto;
+    }
+
+    .info-panel {
+        max-height: 40vh;
+    }
+}

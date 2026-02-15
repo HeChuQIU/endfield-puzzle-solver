@@ -1,0 +1,506 @@
+@page "/"
+@using EndfieldPuzzleSolver.Core.ViewModels
+@using EndfieldPuzzleSolver.Recognition.Models
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="toolbar">
+    <span class="toolbar-title">终末地源石电路解谜器</span>
+    <div class="toolbar-actions">
+        <button class="btn" @onclick="OpenFileDialog">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/>
+            </svg>
+            打开截图
+        </button>
+        <button class="btn" @onclick="PasteFromClipboard">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="5" y="4" width="14" height="16" rx="2"/>
+                <path d="M9 2h6v3H9z"/>
+            </svg>
+            粘贴截图
+        </button>
+        <InputFile id="fileInput" class="file-input-hidden" OnChange="OnFileSelected" accept=".png,.jpg,.jpeg" />
+    </div>
+</div>
+
+<div class="main-content">
+    @* Left: Board area *@
+    <div class="board-area">
+        <div class="card">
+            <h3 class="card-title">谜题主体</h3>
+            <div class="board-container"
+                 @ondragover="OnDragOver"
+                 @ondragover:preventDefault
+                 @ondrop="OnDrop"
+                 @ondrop:preventDefault>
+
+                @if (_viewModel.IsLoading)
+                {
+                    <div class="loading-overlay">
+                        <div class="spinner"></div>
+                    </div>
+                }
+
+                @if (!_viewModel.HasPuzzle)
+                {
+                    <div class="board-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/>
+                        </svg>
+                        <p>拖入截图以加载谜题</p>
+                        <p style="font-size:13px;">或使用顶部工具栏打开/粘贴截图</p>
+                    </div>
+                }
+                else
+                {
+                    @RenderBoard()
+                }
+            </div>
+        </div>
+    </div>
+
+    @* Right: Info panel *@
+    <div class="info-panel">
+        @* Puzzle info card *@
+        <div class="card">
+            <h3 class="card-title">谜题信息</h3>
+            @if (_viewModel.HasPuzzle && _viewModel.PuzzleData != null)
+            {
+                <p>网格大小: @_viewModel.PuzzleData.Rows × @_viewModel.PuzzleData.Cols</p>
+                <p style="font-weight:600;margin:12px 0 4px;">颜色组:</p>
+                @foreach (var cg in _viewModel.PuzzleData.ColorGroups)
+                {
+                    <div class="color-group-item">
+                        <span class="color-swatch" style="background:@HsvToCss(cg.Hue, cg.Saturation, cg.Value)"></span>
+                        <span>@cg.Label (H@(cg.Hue) S@(cg.Saturation) V@(cg.Value))</span>
+                    </div>
+                }
+            }
+            else
+            {
+                <p>请打开截图或拖入图片加载谜题</p>
+            }
+        </div>
+
+        @* Components card *@
+        <div class="card">
+            <h3 class="card-title">元件列表</h3>
+            @if (_viewModel.HasPuzzle && _viewModel.PuzzleData != null)
+            {
+                @for (int i = 0; i < _viewModel.PuzzleData.Components.Length; i++)
+                {
+                    var comp = _viewModel.PuzzleData.Components[i];
+                    var color = GetColorGroupCss(_viewModel.PuzzleData, comp.ColorGroup);
+                    <div class="component-item">
+                        <div class="component-label" style="color:@color">
+                            元件 @(i + 1): @comp.ColorGroup (@comp.TileCount 格)
+                        </div>
+                        @RenderComponentShape(comp, color)
+                    </div>
+                }
+            }
+        </div>
+
+        @* Step navigation card *@
+        @if (_viewModel.HasSolution)
+        {
+            <div class="card">
+                <h3 class="card-title">步骤导航</h3>
+                <div class="step-nav">
+                    <button class="btn" disabled="@(!_viewModel.CanGoPrevious)" @onclick="GoToPreviousStep">上一步</button>
+                    <span>@_viewModel.StepNavigationText</span>
+                    <button class="btn" disabled="@(!_viewModel.CanGoNext)" @onclick="GoToNextStep">下一步</button>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@* Status bar *@
+<div class="status-bar">
+    <div class="status-icon">ℹ</div>
+    <span>@_viewModel.StatusMessage</span>
+</div>
+
+@code {
+    private readonly MainViewModel _viewModel = new();
+    private const double TileSize = 36;
+    private const double RequirementMargin = 24;
+    private const double ShapeCellSize = 14;
+
+    protected override void OnInitialized()
+    {
+        _viewModel.BoardSnapshotChanged += OnBoardChanged;
+        _viewModel.PropertyChanged += OnPropertyChanged;
+    }
+
+    private void OnBoardChanged(object? sender, EventArgs e)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OpenFileDialog()
+    {
+        await JS.InvokeVoidAsync("blazorInterop.clickElement", "fileInput");
+    }
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+
+        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        if (ext is not (".png" or ".jpg" or ".jpeg")) return;
+
+        _viewModel.IsLoading = true;
+        _viewModel.StatusMessage = "正在读取图片...";
+        StateHasChanged();
+
+        try
+        {
+            var tempPath = Path.Combine(Path.GetTempPath(), $"endfield_upload_{DateTime.Now:yyyyMMddHHmmss}{ext}");
+            await using (var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024))
+            await using (var fs = File.Create(tempPath))
+            {
+                await stream.CopyToAsync(fs);
+            }
+
+            await _viewModel.LoadFromScreenshotAsync(tempPath);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.StatusMessage = $"加载失败: {ex.Message}";
+        }
+        finally
+        {
+            _viewModel.IsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PasteFromClipboard()
+    {
+        _viewModel.IsLoading = true;
+        _viewModel.StatusMessage = "正在从剪贴板读取图片...";
+        StateHasChanged();
+
+        try
+        {
+            var imageBytes = await JS.InvokeAsync<byte[]?>("blazorInterop.getClipboardImage");
+            if (imageBytes == null || imageBytes.Length == 0)
+            {
+                _viewModel.StatusMessage = "剪贴板中没有图片";
+                return;
+            }
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"endfield_clipboard_{DateTime.Now:yyyyMMddHHmmss}.png");
+            await File.WriteAllBytesAsync(tempPath, imageBytes);
+            await _viewModel.LoadFromScreenshotAsync(tempPath);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.StatusMessage = $"粘贴失败: {ex.Message}";
+        }
+        finally
+        {
+            _viewModel.IsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnDragOver()
+    {
+        // Handled via preventDefault in markup
+    }
+
+    private void OnDrop()
+    {
+        // Blazor WASM drag-and-drop for files requires JS interop;
+        // simplified: user should use file input instead
+        _viewModel.StatusMessage = "请使用顶部工具栏的\"打开截图\"按钮选择文件";
+    }
+
+    private void GoToPreviousStep()
+    {
+        _viewModel.GoToPreviousStep();
+    }
+
+    private void GoToNextStep()
+    {
+        _viewModel.GoToNextStep();
+    }
+
+    private RenderFragment RenderBoard() => builder =>
+    {
+        var snapshot = _viewModel.GetCurrentBoardSnapshot();
+        var puzzle = _viewModel.PuzzleData;
+        if (snapshot == null || puzzle == null) return;
+
+        int rows = puzzle.Rows;
+        int cols = puzzle.Cols;
+        double gridW = cols * TileSize + 2 * RequirementMargin;
+        double gridH = rows * TileSize + 2 * RequirementMargin;
+
+        builder.OpenElement(0, "svg");
+        builder.AddAttribute(1, "class", "board-svg");
+        builder.AddAttribute(2, "width", gridW.ToString("F0"));
+        builder.AddAttribute(3, "height", gridH.ToString("F0"));
+        builder.AddAttribute(4, "viewBox", $"0 0 {gridW:F0} {gridH:F0}");
+
+        // Row requirements (left side)
+        for (int r = 0; r < rows; r++)
+        {
+            var reqs = puzzle.RowRequirements[r];
+            double y = RequirementMargin + r * TileSize + TileSize / 2;
+            double x = RequirementMargin / 2;
+            foreach (var req in reqs)
+            {
+                int currentFilled = CountColorInRow(snapshot, r, req.ColorGroup);
+                var color = GetColorGroupCss(puzzle, req.ColorGroup);
+                builder.OpenElement(10, "text");
+                builder.AddAttribute(11, "x", (x - 14).ToString("F1"));
+                builder.AddAttribute(12, "y", (y + 4).ToString("F1"));
+                builder.AddAttribute(13, "fill", color);
+                builder.AddAttribute(14, "font-size", "11");
+                builder.AddAttribute(15, "text-anchor", "middle");
+                builder.AddContent(16, $"{currentFilled}/{req.Count}");
+                builder.CloseElement();
+                x -= 28;
+            }
+        }
+
+        // Column requirements (top)
+        for (int c = 0; c < cols; c++)
+        {
+            var reqs = puzzle.ColumnRequirements[c];
+            double x = RequirementMargin + c * TileSize + TileSize / 2;
+            double y = RequirementMargin / 2;
+            foreach (var req in reqs)
+            {
+                int currentFilled = CountColorInCol(snapshot, c, req.ColorGroup);
+                var color = GetColorGroupCss(puzzle, req.ColorGroup);
+                builder.OpenElement(20, "text");
+                builder.AddAttribute(21, "x", x.ToString("F1"));
+                builder.AddAttribute(22, "y", (y + 4).ToString("F1"));
+                builder.AddAttribute(23, "fill", color);
+                builder.AddAttribute(24, "font-size", "11");
+                builder.AddAttribute(25, "text-anchor", "middle");
+                builder.AddContent(26, $"{currentFilled}/{req.Count}");
+                builder.CloseElement();
+                y -= 16;
+            }
+        }
+
+        // Pass 1: Draw tile fills
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                var tile = snapshot[r, c];
+                double left = RequirementMargin + c * TileSize;
+                double top = RequirementMargin + r * TileSize;
+
+                string? fill = tile.Type switch
+                {
+                    TileType.Disabled => "#696969",
+                    TileType.Lock when tile.ColorGroup != null => GetColorGroupCss(puzzle, tile.ColorGroup),
+                    _ => null
+                };
+
+                if (fill != null)
+                {
+                    builder.OpenElement(30, "rect");
+                    builder.AddAttribute(31, "x", left.ToString("F1"));
+                    builder.AddAttribute(32, "y", top.ToString("F1"));
+                    builder.AddAttribute(33, "width", TileSize.ToString("F0"));
+                    builder.AddAttribute(34, "height", TileSize.ToString("F0"));
+                    builder.AddAttribute(35, "fill", fill);
+                    builder.CloseElement();
+                }
+
+                // Icon overlays
+                if (tile.Type == TileType.Disabled)
+                {
+                    builder.OpenElement(40, "text");
+                    builder.AddAttribute(41, "x", (left + TileSize / 2).ToString("F1"));
+                    builder.AddAttribute(42, "y", (top + TileSize / 2 + 6).ToString("F1"));
+                    builder.AddAttribute(43, "fill", "white");
+                    builder.AddAttribute(44, "font-size", "18");
+                    builder.AddAttribute(45, "text-anchor", "middle");
+                    builder.AddContent(46, "⊘");
+                    builder.CloseElement();
+                }
+                else if (tile.Type == TileType.Lock && tile.PlacedComponentIndex < 0 && tile.ColorGroup != null)
+                {
+                    builder.OpenElement(50, "text");
+                    builder.AddAttribute(51, "x", (left + TileSize / 2).ToString("F1"));
+                    builder.AddAttribute(52, "y", (top + TileSize / 2 + 5).ToString("F1"));
+                    builder.AddAttribute(53, "font-size", "14");
+                    builder.AddAttribute(54, "text-anchor", "middle");
+                    builder.AddContent(55, "🔒");
+                    builder.CloseElement();
+                }
+            }
+        }
+
+        // Pass 2: Draw borders
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                var tile = snapshot[r, c];
+                double left = RequirementMargin + c * TileSize;
+                double top = RequirementMargin + r * TileSize;
+
+                string stroke = tile.Type switch
+                {
+                    TileType.Empty => "#696969",
+                    TileType.Disabled => "#696969",
+                    _ => "#000000"
+                };
+
+                // Top border
+                if (r == 0 || !IsSameComponent(tile, snapshot[r - 1, c]))
+                    AddSvgLine(builder, left, top, left + TileSize, top, stroke);
+
+                // Left border
+                if (c == 0 || !IsSameComponent(tile, snapshot[r, c - 1]))
+                    AddSvgLine(builder, left, top, left, top + TileSize, stroke);
+
+                // Bottom border
+                if (r == rows - 1 || !IsSameComponent(tile, snapshot[r + 1, c]))
+                    AddSvgLine(builder, left, top + TileSize, left + TileSize, top + TileSize, stroke);
+
+                // Right border
+                if (c == cols - 1 || !IsSameComponent(tile, snapshot[r, c + 1]))
+                    AddSvgLine(builder, left + TileSize, top, left + TileSize, top + TileSize, stroke);
+            }
+        }
+
+        builder.CloseElement(); // svg
+    };
+
+    private static void AddSvgLine(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, double x1, double y1, double x2, double y2, string stroke)
+    {
+        builder.OpenElement(60, "line");
+        builder.AddAttribute(61, "x1", x1.ToString("F1"));
+        builder.AddAttribute(62, "y1", y1.ToString("F1"));
+        builder.AddAttribute(63, "x2", x2.ToString("F1"));
+        builder.AddAttribute(64, "y2", y2.ToString("F1"));
+        builder.AddAttribute(65, "stroke", stroke);
+        builder.AddAttribute(66, "stroke-width", "1");
+        builder.CloseElement();
+    }
+
+    private RenderFragment RenderComponentShape(ComponentInfo comp, string color) => builder =>
+    {
+        double w = comp.Cols * ShapeCellSize;
+        double h = comp.Rows * ShapeCellSize;
+
+        builder.OpenElement(0, "svg");
+        builder.AddAttribute(1, "width", w.ToString("F0"));
+        builder.AddAttribute(2, "height", h.ToString("F0"));
+        builder.AddAttribute(3, "style", "margin:4px 0;");
+
+        for (int sr = 0; sr < comp.Rows; sr++)
+        {
+            for (int sc = 0; sc < comp.Cols; sc++)
+            {
+                if (comp.Shape[sr, sc])
+                {
+                    builder.OpenElement(10, "rect");
+                    builder.AddAttribute(11, "x", (sc * ShapeCellSize).ToString("F0"));
+                    builder.AddAttribute(12, "y", (sr * ShapeCellSize).ToString("F0"));
+                    builder.AddAttribute(13, "width", (ShapeCellSize - 1).ToString("F0"));
+                    builder.AddAttribute(14, "height", (ShapeCellSize - 1).ToString("F0"));
+                    builder.AddAttribute(15, "fill", color);
+                    builder.AddAttribute(16, "stroke", "black");
+                    builder.AddAttribute(17, "stroke-width", "0.5");
+                    builder.CloseElement();
+                }
+            }
+        }
+
+        builder.CloseElement(); // svg
+    };
+
+    private static bool IsSameComponent(TileInfo a, TileInfo b)
+        => a.PlacedComponentIndex >= 0 && a.PlacedComponentIndex == b.PlacedComponentIndex;
+
+    private static int CountColorInRow(TileInfo[,] board, int row, string colorGroup)
+    {
+        int count = 0;
+        int cols = board.GetLength(1);
+        for (int c = 0; c < cols; c++)
+        {
+            var tile = board[row, c];
+            if (tile.Type == TileType.Lock && tile.ColorGroup == colorGroup)
+                count++;
+        }
+        return count;
+    }
+
+    private static int CountColorInCol(TileInfo[,] board, int col, string colorGroup)
+    {
+        int count = 0;
+        int rows = board.GetLength(0);
+        for (int r = 0; r < rows; r++)
+        {
+            var tile = board[r, col];
+            if (tile.Type == TileType.Lock && tile.ColorGroup == colorGroup)
+                count++;
+        }
+        return count;
+    }
+
+    private static string GetColorGroupCss(PuzzleData puzzle, string colorGroup)
+    {
+        var cg = puzzle.ColorGroups.FirstOrDefault(x => x.Label == colorGroup);
+        if (cg != null)
+            return HsvToCss(cg.Hue, cg.Saturation, cg.Value);
+        return "#808080";
+    }
+
+    private static string HsvToCss(int h, int s, int v)
+    {
+        var (r, g, b) = HsvToRgb(h, s, v);
+        return $"rgb({r},{g},{b})";
+    }
+
+    private static (byte R, byte G, byte B) HsvToRgb(int h, int s, int v)
+    {
+        double hDeg = Math.Clamp(h * 2.0, 0, 360);
+        double sNorm = Math.Clamp(s / 255.0, 0, 1);
+        double vNorm = Math.Clamp(v / 255.0, 0, 1);
+
+        double c = vNorm * sNorm;
+        double x = c * (1 - Math.Abs((hDeg / 60.0) % 2 - 1));
+        double m = vNorm - c;
+
+        double r1, g1, b1;
+        if (hDeg < 60) { r1 = c; g1 = x; b1 = 0; }
+        else if (hDeg < 120) { r1 = x; g1 = c; b1 = 0; }
+        else if (hDeg < 180) { r1 = 0; g1 = c; b1 = x; }
+        else if (hDeg < 240) { r1 = 0; g1 = x; b1 = c; }
+        else if (hDeg < 300) { r1 = x; g1 = 0; b1 = c; }
+        else { r1 = c; g1 = 0; b1 = x; }
+
+        return (
+            (byte)((r1 + m) * 255),
+            (byte)((g1 + m) * 255),
+            (byte)((b1 + m) * 255)
+        );
+    }
+
+    public void Dispose()
+    {
+        _viewModel.BoardSnapshotChanged -= OnBoardChanged;
+        _viewModel.PropertyChanged -= OnPropertyChanged;
+    }
+}
