@@ -4,7 +4,11 @@
 
 ## 🚀 快速开始
 
-### 下载发布版本
+### 在线使用（Web 版本）
+
+访问 [https://hechuqiu.github.io/endfield-puzzle-solver/](https://hechuqiu.github.io/endfield-puzzle-solver/) 在线使用
+
+### 下载桌面版本
 
 访问 [Releases 页面](../../releases) 下载最新版本的 ZIP 文件。
 
@@ -19,6 +23,16 @@ docker run -d -p 8080:8080 --name endfield-api hechuqiu/endfield-puzzle-solver-a
 
 # 测试 API
 curl http://localhost:8080/api/health
+```
+
+### 生产环境部署（Docker + Caddy + HTTPS）
+
+```bash
+# 使用 docker-compose 部署（自动 HTTPS）
+docker-compose up -d
+
+# 详细部署文档
+# 请查看 HeChu-docs/DEPLOYMENT.md
 ```
 
 ### 本地开发
@@ -149,6 +163,12 @@ MIT License 是一种最宽松的开源许可证，允许：
 
 仅要求保留原作者声明和许可证副本。
 
+## 📚 相关文档
+
+- [部署指南](HeChu-docs/DEPLOYMENT.md) - 服务器部署步骤
+- [发布流程](HeChu-docs/RELEASE.md) - GitHub Actions 发布流程
+- [变更日志](HeChu-docs/CHANGELOG.md) - 需求变更历史
+
 ---
 
-**最后更新**: 2026-02-14
+**最后更新**: 2026-02-16

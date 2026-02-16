@@ -8,6 +8,7 @@
 
 - [2026-02-16] 创建需求
 - [2026-02-16] 完成开发：修复 Program.cs 缺少服务配置的问题，添加 AppSettings 配置读取、HttpClient BaseAddress 配置、PuzzleApiClient 服务注册、FluentUI 服务注册；解决前端无法连接后端的问题；编译通过 0 错误 2 警告（AOT 兼容性警告不影响功能）
+- [2026-02-16] 配置生产部署：创建 docker-compose.yml 和 Caddyfile，配置 Caddy 自动 HTTPS、反向代理、CORS；更新前端配置指向生产域名；创建完整部署文档 DEPLOYMENT.md
 
 ---
 
