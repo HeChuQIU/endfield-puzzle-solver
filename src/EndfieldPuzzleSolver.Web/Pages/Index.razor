@@ -1,0 +1,627 @@
+@page "/"
+@inject PuzzleApiClient Api
+@inject IJSRuntime JS
+@inject IToastService Toast
+@inject NavigationManager Nav
+@implements IDisposable
+
+<div class="page-root">
+
+    @* ─── 工具栏 ─── *@
+    <FluentToolbar Style="padding:8px 16px;background-color:#ffffff;border-bottom:1px solid #e1dfdd;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+        <FluentLabel Typo="Typography.H5" Weight="FontWeight.Bold" Style="margin-right:auto;color:#323130;">终末地源石电路解谜器</FluentLabel>
+        <FluentButton Appearance="Appearance.Accent" OnClick="OpenFileDialog"
+                      IconStart="@(new Icons.Regular.Size16.FolderOpen())">
+            打开截图
+        </FluentButton>
+        <FluentButton OnClick="PasteFromClipboard"
+                      IconStart="@(new Icons.Regular.Size16.ClipboardPaste())">
+            粘贴截图
+        </FluentButton>
+        <InputFile id="fileInput" class="file-input-hidden" OnChange="OnFileSelected" accept=".png,.jpg,.jpeg" />
+    </FluentToolbar>
+
+    <div class="main-content">
+        @* ─── 左侧: 棋盘区 ─── *@
+        <div class="board-area">
+            <div class="board-container" @ref="_boardContainer">
+
+                @if (_isLoading)
+                {
+                    <div class="loading-overlay">
+                        <FluentProgressRing />
+                        <FluentLabel Style="margin-top:16px;">正在处理...</FluentLabel>
+                    </div>
+                }
+
+                @if (_puzzle == null)
+                {
+                    <div class="board-placeholder">
+                        <FluentIcon Value="@(new Icons.Regular.Size48.Image())" />
+                        <FluentLabel Typo="Typography.H4">加载谜题</FluentLabel>
+                        <FluentLabel Typo="Typography.Body">
+                            拖入截图，或使用顶部工具栏打开/粘贴
+                            <br />
+                            也可点击右侧示例快速体验
+                        </FluentLabel>
+                    </div>
+                }
+                else
+                {
+                    @RenderBoard()
+                }
+            </div>
+        </div>
+
+        @* ─── 右侧: 信息面板 ─── *@
+        <div class="info-panel">
+            @* 谜题信息 *@
+            <FluentCard>
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <FluentIcon Value="@(new Icons.Regular.Size24.Info())" Color="Color.Neutral" Style="margin-right:8px;" />
+                    <FluentLabel Weight="FontWeight.Bold">基本信息</FluentLabel>
+                </div>
+                
+                @if (_puzzle != null)
+                {
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+                        <div>
+                            <FluentLabel Typo="Typography.Body" Style="font-size: 0.85em; color: var(--neutral-foreground-hint);">网格尺寸</FluentLabel>
+                            <FluentLabel Weight="FontWeight.Bold">@_puzzle.Rows × @_puzzle.Cols</FluentLabel>
+                        </div>
+                        <div>
+                            <FluentLabel Typo="Typography.Body" Style="font-size: 0.85em; color: var(--neutral-foreground-hint);">总格数</FluentLabel>
+                            <FluentLabel Weight="FontWeight.Bold">@(_puzzle.Rows * _puzzle.Cols)</FluentLabel>
+                        </div>
+                    </div>
+                    
+                    <FluentDivider Style="margin:8px 0;" />
+                    <FluentLabel Typo="Typography.Body" Style="font-size: 0.85em; color: var(--neutral-foreground-hint); margin-bottom:4px;">识别颜色组</FluentLabel>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                        @foreach (var cg in _puzzle.ColorGroups)
+                        {
+                            <div class="color-group-item" title="H:@cg.Hue S:@cg.Saturation V:@cg.Value">
+                                <span class="color-swatch" style="background:@HsvToCss(cg.Hue, cg.Saturation, cg.Value);border:none;box-shadow:0 1px 3px rgba(0,0,0,0.2);"></span>
+                                <FluentLabel Typo="Typography.Body">@cg.Label</FluentLabel>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <FluentLabel Typo="Typography.Body" Color="Color.Neutral">暂无数据</FluentLabel>
+                }
+            </FluentCard>
+
+            @* 元件列表 *@
+            <FluentCard>
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <FluentIcon Value="@(new Icons.Regular.Size24.Grid())" Color="Color.Neutral" Style="margin-right:8px;" />
+                    <FluentLabel Weight="FontWeight.Bold">可用元件</FluentLabel>
+                </div>
+
+                @if (_puzzle != null)
+                {
+                    <div class="component-list">
+                        @for (int i = 0; i < _puzzle.Components.Length; i++)
+                        {
+                            var comp = _puzzle.Components[i];
+                            var color = GetColorGroupCss(_puzzle, comp.ColorGroup);
+                            <div class="component-item">
+                                <div class="component-label" style="@($"color:{color};border-bottom:2px solid {color};padding-bottom:2px;margin-bottom:6px;")">
+                                    元件 @(i + 1) (@comp.TileCount)
+                                </div>
+                                @RenderComponentShape(comp, color)
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                     <FluentLabel Typo="Typography.Body" Color="Color.Neutral">加载谜题以查看</FluentLabel>
+                }
+            </FluentCard>
+
+            @* 示例图片 *@
+            <FluentCard>
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <FluentIcon Value="@(new Icons.Regular.Size24.ImageCopy())" Color="Color.Neutral" Style="margin-right:8px;" />
+                    <FluentLabel Weight="FontWeight.Bold">示例库</FluentLabel>
+                </div>
+                
+                <div class="sample-grid">
+                    <div class="sample-image-container" @onclick="@(() => LoadSampleImage(0))">
+                        <img src="samples/puzzle0.png" alt="简单示例" />
+                        <div class="sample-overlay">示例 1 (5x5)</div>
+                    </div>
+                    <div class="sample-image-container" @onclick="@(() => LoadSampleImage(1))">
+                        <img src="samples/puzzle1.png" alt="复杂示例" />
+                        <div class="sample-overlay">示例 2 (6x6)</div>
+                    </div>
+                </div>
+            </FluentCard>
+        </div>
+    </div>
+
+    @* ─── 状态栏 ─── *@
+    <FluentToolbar Style="padding:4px 16px;background-color:#f8f8f8;border-top:1px solid #e1dfdd;font-size:12px;">
+        <FluentIcon Value="@(new Icons.Regular.Size16.Info())" Color="Color.Accent" Style="margin-right:8px;" />
+        <FluentLabel Style="font-size:12px;">@_statusMessage</FluentLabel>
+    </FluentToolbar>
+</div>
+
+@code {
+    private PuzzleDataDto? _puzzle;
+    private SolveResultDto? _solution;
+    private bool _isLoading;
+    private string _statusMessage = "就绪";
+    private ElementReference _boardContainer;
+    private DotNetObjectReference<Index>? _dotNetHelper;
+
+    private const double TileSize = 36;
+    private const double RequirementMargin = 24;
+    private const double ShapeCellSize = 14;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _dotNetHelper = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("blazorInterop.setupDropZone", _boardContainer, _dotNetHelper);
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnDropFile(byte[] bytes, string fileName)
+    {
+        _isLoading = true;
+        _statusMessage = "正在上传并识别...";
+        StateHasChanged();
+
+        try
+        {
+            using var stream = new MemoryStream(bytes);
+            var result = await Api.DetectAndSolveAsync(stream, fileName);
+
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? "识别并求解成功" : (_solution?.Message ?? "无解");
+                Toast.ShowSuccess("图片识别成功");
+            }
+            else
+            {
+                _puzzle = null;
+                _solution = null;
+                _statusMessage = $"识别失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
+        }
+        catch (Exception ex)
+        {
+            _statusMessage = $"拖拽失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void OnDropError(string message)
+    {
+        _statusMessage = message;
+        Toast.ShowWarning(message);
+        StateHasChanged();
+    }
+
+    private async Task OpenFileDialog()
+    {
+        await JS.InvokeVoidAsync("blazorInterop.clickElement", "fileInput");
+    }
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+
+        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        if (ext is not (".png" or ".jpg" or ".jpeg")) return;
+
+        _isLoading = true;
+        _statusMessage = "正在上传并识别...";
+        StateHasChanged();
+
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
+            var result = await Api.DetectAndSolveAsync(stream, file.Name);
+
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? "识别并求解成功" : (_solution?.Message ?? "无解");
+            }
+            else
+            {
+                _puzzle = null;
+                _solution = null;
+                _statusMessage = $"识别失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
+        }
+        catch (Exception ex)
+        {
+            _statusMessage = $"加载失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PasteFromClipboard()
+    {
+        _isLoading = true;
+        _statusMessage = "正在从剪贴板读取图片...";
+        StateHasChanged();
+
+        try
+        {
+            var imageBytes = await JS.InvokeAsync<byte[]?>("blazorInterop.getClipboardImage");
+            if (imageBytes == null || imageBytes.Length == 0)
+            {
+                _statusMessage = "剪贴板中没有图片";
+                Toast.ShowWarning("剪贴板中没有图片");
+                return;
+            }
+
+            _statusMessage = "正在上传并识别...";
+            StateHasChanged();
+
+            using var stream = new MemoryStream(imageBytes);
+            var result = await Api.DetectAndSolveAsync(stream, "clipboard.png");
+
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? "识别并求解成功" : (_solution?.Message ?? "无解");
+            }
+            else
+            {
+                _puzzle = null;
+                _solution = null;
+                _statusMessage = $"识别失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
+        }
+        catch (Exception ex)
+        {
+            _statusMessage = $"粘贴失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadSampleImage(int index)
+    {
+        _isLoading = true;
+        _statusMessage = $"正在识别示例谜题 {index + 1}...";
+        StateHasChanged();
+
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var imageBytes = await http.GetByteArrayAsync($"samples/puzzle{index}.png");
+            
+            using var stream = new MemoryStream(imageBytes);
+            var result = await Api.DetectAndSolveAsync(stream, $"puzzle{index}.png");
+
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? $"示例 {index + 1} 识别成功" : (_solution?.Message ?? "无解");
+            }
+            else
+            {
+                _statusMessage = $"识别示例失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
+        }
+        catch (Exception ex)
+        {
+            _statusMessage = $"加载示例失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private TileInfoDto[,]? GetFinalBoardState()
+    {
+        if (_puzzle == null) return null;
+        if (_solution is not { IsSolved: true } sol || sol.Steps.Count == 0)
+            return _puzzle.Tiles;
+        return sol.Steps[^1].BoardSnapshot;
+    }
+
+    // ──────────── 渲染逻辑 ────────────
+
+    private RenderFragment RenderBoard() => builder =>
+    {
+        var snapshot = GetFinalBoardState();
+        if (snapshot == null || _puzzle == null) return;
+
+        int rows = _puzzle.Rows;
+        int cols = _puzzle.Cols;
+        double gridW = cols * TileSize + 2 * RequirementMargin;
+        double gridH = rows * TileSize + 2 * RequirementMargin;
+
+        builder.OpenElement(0, "svg");
+        builder.AddAttribute(1, "class", "board-svg");
+        builder.AddAttribute(2, "width", gridW.ToString("F0"));
+        builder.AddAttribute(3, "height", gridH.ToString("F0"));
+        builder.AddAttribute(4, "viewBox", $"0 0 {gridW:F0} {gridH:F0}");
+
+        // Row requirements
+        for (int r = 0; r < rows; r++)
+        {
+            var reqs = _puzzle.RowRequirements[r];
+            double y = RequirementMargin + r * TileSize + TileSize / 2;
+            double x = RequirementMargin / 2;
+            foreach (var req in reqs)
+            {
+                int currentFilled = CountColorInRow(snapshot, r, req.ColorGroup);
+                var color = GetColorGroupCss(_puzzle, req.ColorGroup);
+                builder.OpenElement(10, "text");
+                builder.AddAttribute(11, "x", (x - 14).ToString("F1"));
+                builder.AddAttribute(12, "y", (y + 4).ToString("F1"));
+                builder.AddAttribute(13, "fill", color);
+                builder.AddAttribute(14, "font-size", "11");
+                builder.AddAttribute(15, "text-anchor", "middle");
+                builder.AddContent(16, $"{currentFilled}/{req.Count}");
+                builder.CloseElement();
+                x -= 28;
+            }
+        }
+
+        // Column requirements
+        for (int c = 0; c < cols; c++)
+        {
+            var reqs = _puzzle.ColumnRequirements[c];
+            double x = RequirementMargin + c * TileSize + TileSize / 2;
+            double y = RequirementMargin / 2;
+            foreach (var req in reqs)
+            {
+                int currentFilled = CountColorInCol(snapshot, c, req.ColorGroup);
+                var color = GetColorGroupCss(_puzzle, req.ColorGroup);
+                builder.OpenElement(20, "text");
+                builder.AddAttribute(21, "x", x.ToString("F1"));
+                builder.AddAttribute(22, "y", (y + 4).ToString("F1"));
+                builder.AddAttribute(23, "fill", color);
+                builder.AddAttribute(24, "font-size", "11");
+                builder.AddAttribute(25, "text-anchor", "middle");
+                builder.AddContent(26, $"{currentFilled}/{req.Count}");
+                builder.CloseElement();
+                y -= 16;
+            }
+        }
+
+        // Pass 1: tile fills
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                var tile = snapshot[r, c];
+                double left = RequirementMargin + c * TileSize;
+                double top = RequirementMargin + r * TileSize;
+
+                string? fill = tile.Type switch
+                {
+                    TileType.Disabled => "#696969",
+                    TileType.Lock when tile.ColorGroup != null => GetColorGroupCss(_puzzle, tile.ColorGroup),
+                    _ => null
+                };
+
+                if (fill != null)
+                {
+                    builder.OpenElement(30, "rect");
+                    builder.AddAttribute(31, "x", left.ToString("F1"));
+                    builder.AddAttribute(32, "y", top.ToString("F1"));
+                    builder.AddAttribute(33, "width", TileSize.ToString("F0"));
+                    builder.AddAttribute(34, "height", TileSize.ToString("F0"));
+                    builder.AddAttribute(35, "fill", fill);
+                    builder.CloseElement();
+                }
+
+                if (tile.Type == TileType.Disabled)
+                {
+                    builder.OpenElement(40, "text");
+                    builder.AddAttribute(41, "x", (left + TileSize / 2).ToString("F1"));
+                    builder.AddAttribute(42, "y", (top + TileSize / 2 + 6).ToString("F1"));
+                    builder.AddAttribute(43, "fill", "white");
+                    builder.AddAttribute(44, "font-size", "18");
+                    builder.AddAttribute(45, "text-anchor", "middle");
+                    builder.AddContent(46, "⊘");
+                    builder.CloseElement();
+                }
+                else if (tile.Type == TileType.Lock && tile.PlacedComponentIndex < 0 && tile.ColorGroup != null)
+                {
+                    builder.OpenElement(50, "text");
+                    builder.AddAttribute(51, "x", (left + TileSize / 2).ToString("F1"));
+                    builder.AddAttribute(52, "y", (top + TileSize / 2 + 5).ToString("F1"));
+                    builder.AddAttribute(53, "font-size", "14");
+                    builder.AddAttribute(54, "text-anchor", "middle");
+                    builder.AddContent(55, "🔒");
+                    builder.CloseElement();
+                }
+            }
+        }
+
+        // Pass 2: borders
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                var tile = snapshot[r, c];
+                double left = RequirementMargin + c * TileSize;
+                double top = RequirementMargin + r * TileSize;
+
+                string stroke = tile.Type switch
+                {
+                    TileType.Empty => "#696969",
+                    TileType.Disabled => "#696969",
+                    _ => "#000000"
+                };
+
+                if (r == 0 || !IsSameComponent(tile, snapshot[r - 1, c]))
+                    AddSvgLine(builder, left, top, left + TileSize, top, stroke);
+                if (c == 0 || !IsSameComponent(tile, snapshot[r, c - 1]))
+                    AddSvgLine(builder, left, top, left, top + TileSize, stroke);
+                if (r == rows - 1 || !IsSameComponent(tile, snapshot[r + 1, c]))
+                    AddSvgLine(builder, left, top + TileSize, left + TileSize, top + TileSize, stroke);
+                if (c == cols - 1 || !IsSameComponent(tile, snapshot[r, c + 1]))
+                    AddSvgLine(builder, left + TileSize, top, left + TileSize, top + TileSize, stroke);
+            }
+        }
+
+        builder.CloseElement(); // svg
+    };
+
+    private static void AddSvgLine(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, double x1, double y1, double x2, double y2, string stroke)
+    {
+        builder.OpenElement(60, "line");
+        builder.AddAttribute(61, "x1", x1.ToString("F1"));
+        builder.AddAttribute(62, "y1", y1.ToString("F1"));
+        builder.AddAttribute(63, "x2", x2.ToString("F1"));
+        builder.AddAttribute(64, "y2", y2.ToString("F1"));
+        builder.AddAttribute(65, "stroke", stroke);
+        builder.AddAttribute(66, "stroke-width", "1");
+        builder.CloseElement();
+    }
+
+    private RenderFragment RenderComponentShape(ComponentInfoDto comp, string color) => builder =>
+    {
+        double w = comp.Cols * ShapeCellSize;
+        double h = comp.Rows * ShapeCellSize;
+
+        builder.OpenElement(0, "svg");
+        builder.AddAttribute(1, "width", w.ToString("F0"));
+        builder.AddAttribute(2, "height", h.ToString("F0"));
+        builder.AddAttribute(3, "style", "margin:4px 0;");
+
+        for (int sr = 0; sr < comp.Rows; sr++)
+        {
+            for (int sc = 0; sc < comp.Cols; sc++)
+            {
+                if (comp.Shape[sr, sc])
+                {
+                    builder.OpenElement(10, "rect");
+                    builder.AddAttribute(11, "x", (sc * ShapeCellSize).ToString("F0"));
+                    builder.AddAttribute(12, "y", (sr * ShapeCellSize).ToString("F0"));
+                    builder.AddAttribute(13, "width", (ShapeCellSize - 1).ToString("F0"));
+                    builder.AddAttribute(14, "height", (ShapeCellSize - 1).ToString("F0"));
+                    builder.AddAttribute(15, "fill", color);
+                    builder.AddAttribute(16, "stroke", "black");
+                    builder.AddAttribute(17, "stroke-width", "0.5");
+                    builder.CloseElement();
+                }
+            }
+        }
+
+        builder.CloseElement();
+    };
+
+    // ──────────── 辅助方法 ────────────
+
+    private static bool IsSameComponent(TileInfoDto a, TileInfoDto b)
+        => a.PlacedComponentIndex >= 0 && a.PlacedComponentIndex == b.PlacedComponentIndex;
+
+    private static int CountColorInRow(TileInfoDto[,] board, int row, string colorGroup)
+    {
+        int count = 0;
+        int cols = board.GetLength(1);
+        for (int c = 0; c < cols; c++)
+            if (board[row, c].Type == TileType.Lock && board[row, c].ColorGroup == colorGroup) count++;
+        return count;
+    }
+
+    private static int CountColorInCol(TileInfoDto[,] board, int col, string colorGroup)
+    {
+        int count = 0;
+        int rows = board.GetLength(0);
+        for (int r = 0; r < rows; r++)
+            if (board[r, col].Type == TileType.Lock && board[r, col].ColorGroup == colorGroup) count++;
+        return count;
+    }
+
+    private static string GetColorGroupCss(PuzzleDataDto puzzle, string colorGroup)
+    {
+        var cg = puzzle.ColorGroups.FirstOrDefault(x => x.Label == colorGroup);
+        return cg != null ? HsvToCss(cg.Hue, cg.Saturation, cg.Value) : "#808080";
+    }
+
+    private static string HsvToCss(int h, int s, int v)
+    {
+        var (r, g, b) = HsvToRgb(h, s, v);
+        return $"rgb({r},{g},{b})";
+    }
+
+    private static (byte R, byte G, byte B) HsvToRgb(int h, int s, int v)
+    {
+        double hDeg = Math.Clamp(h * 2.0, 0, 360);
+        double sNorm = Math.Clamp(s / 255.0, 0, 1);
+        double vNorm = Math.Clamp(v / 255.0, 0, 1);
+        double c = vNorm * sNorm;
+        double x = c * (1 - Math.Abs((hDeg / 60.0) % 2 - 1));
+        double m = vNorm - c;
+        double r1, g1, b1;
+        if (hDeg < 60) { r1 = c; g1 = x; b1 = 0; }
+        else if (hDeg < 120) { r1 = x; g1 = c; b1 = 0; }
+        else if (hDeg < 180) { r1 = 0; g1 = c; b1 = x; }
+        else if (hDeg < 240) { r1 = 0; g1 = x; b1 = c; }
+        else if (hDeg < 300) { r1 = x; g1 = 0; b1 = c; }
+        else { r1 = c; g1 = 0; b1 = x; }
+        return ((byte)((r1 + m) * 255), (byte)((g1 + m) * 255), (byte)((b1 + m) * 255));
+    }
+
+    public void Dispose()
+    {
+        _dotNetHelper?.Dispose();
+    }
+}
