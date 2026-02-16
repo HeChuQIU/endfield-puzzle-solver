@@ -30,12 +30,10 @@ RUN dotnet publish EndfieldPuzzleSolver.Api/EndfieldPuzzleSolver.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 WORKDIR /app
 
-# 安装 OpenCV 依赖
-RUN apt-get update && apt-get install -y \
-    libopencv-core406 \
-    libopencv-imgproc406 \
-    libopencv-imgcodecs406 \
+# 安装 OpenCvSharp 运行时依赖（原生库由 NuGet 包 OpenCvSharp4.official.runtime.linux-x64 提供）
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdiplus \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 从构建阶段复制发布文件

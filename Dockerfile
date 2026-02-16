@@ -2,11 +2,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
 WORKDIR /app
 EXPOSE 8080
 
-# 安装 OpenCV 运行时依赖
+# 安装 OpenCvSharp 运行时依赖（原生库由 NuGet 包 OpenCvSharp4.official.runtime.linux-x64 提供）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdiplus \
-    libc6-dev \
-    libx11-6 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build

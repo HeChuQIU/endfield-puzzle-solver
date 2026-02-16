@@ -16,6 +16,7 @@
 
 - [2026-02-16] 创建需求
 - [2026-02-16] 完成开发：创建 Dockerfile 多阶段构建配置；修复 OpenCvSharp4 依赖问题（移除不存在的 runtime.linux 包，通过系统包管理器安装 OpenCV）；构建并测试 Docker 镜像；发布到 Docker Hub (hechuqiu/endfield-puzzle-solver-api:latest)；更新 README.md 添加 Docker 使用说明；创建 REQ-025.md 详细文档
+- [2026-02-16] 修复 OpenCvSharpExtern 运行时库缺失：添加 NuGet 包 `Sdcb.OpenCvSharp4.mini.runtime.ubuntu.22.04-x64` 提供 Linux 原生库；更新 Containerfile 和 Dockerfile 运行时依赖（libgdiplus + libgomp1）；验证 /api/detect 端点图像识别正常；重新构建并推送 Docker 镜像
 
 ---
 
