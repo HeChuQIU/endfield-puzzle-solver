@@ -26,8 +26,8 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Restore dependencies
-        run: dotnet restore
+      - name: Restore Web dependencies
+        run: dotnet restore src/EndfieldPuzzleSolver.Web/EndfieldPuzzleSolver.Web.csproj
 
       - name: Publish Web Project
         run: |
