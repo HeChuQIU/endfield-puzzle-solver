@@ -1,0 +1,13 @@
+**/.dockerignore
+**/.git
+**/.gitignore
+**/.vs
+**/bin
+**/obj
+**/node_modules
+**/publish
+**/prototype
+**/*.user
+**/HeChu-docs
+LICENSE
+README.md

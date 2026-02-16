@@ -4,6 +4,13 @@
 
 ---
 
+## REQ-025: Docker 容器化部署
+
+- [2026-02-16] 创建需求
+- [2026-02-16] 完成开发：创建 Dockerfile 多阶段构建配置；修复 OpenCvSharp4 依赖问题（移除不存在的 runtime.linux 包，通过系统包管理器安装 OpenCV）；构建并测试 Docker 镜像；发布到 Docker Hub (hechuqiu/endfield-puzzle-solver-api:latest)；更新 README.md 添加 Docker 使用说明；创建 REQ-025.md 详细文档
+
+---
+
 ## REQ-024: Web 拖拽功能修复 - 支持图片拖入
 
 - [2026-02-16] 创建需求

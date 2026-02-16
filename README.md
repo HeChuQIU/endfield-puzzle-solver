@@ -8,6 +8,19 @@
 
 访问 [Releases 页面](../../releases) 下载最新版本的 ZIP 文件。
 
+### 使用 Docker 运行后端 API
+
+```bash
+# 拉取镜像
+docker pull hechuqiu/endfield-puzzle-solver-api:latest
+
+# 运行容器
+docker run -d -p 8080:8080 --name endfield-api hechuqiu/endfield-puzzle-solver-api:latest
+
+# 测试 API
+curl http://localhost:8080/api/health
+```
+
 ### 本地开发
 
 ```bash
@@ -20,6 +33,9 @@ dotnet restore
 
 # 运行 Avalonia 版本
 dotnet run --project src/EndfieldPuzzleSolver.Avalonia/EndfieldPuzzleSolver.Avalonia.csproj
+
+# 运行后端 API
+dotnet run --project src/EndfieldPuzzleSolver.Api/EndfieldPuzzleSolver.Api.csproj
 ```
 
 ### 本地构建发布版本
@@ -33,18 +49,31 @@ dotnet publish src/EndfieldPuzzleSolver.Avalonia/EndfieldPuzzleSolver.Avalonia.c
   -c Release -r win-x64 --self-contained -o publish/avalonia
 ```
 
+### 本地构建 Docker 镜像
+
+```bash
+# 构建镜像
+docker build -t endfield-puzzle-solver-api:latest -f Dockerfile .
+
+# 运行容器
+docker run -d -p 8080:8080 endfield-puzzle-solver-api:latest
+```
+
 ## 📦 项目结构
 
 ```
 endfield-puzzle-solver/
 ├── src/
 │   ├── EndfieldPuzzleSolver.Avalonia/      # Avalonia UI 项目 (推荐)
+│   ├── EndfieldPuzzleSolver.Web/           # Blazor WASM 项目
+│   ├── EndfieldPuzzleSolver.Api/           # 后端 API 项目
 │   ├── EndfieldPuzzleSolver/               # WinUI3 项目 (已弃用)
 │   ├── EndfieldPuzzleSolver.Core/          # 核心业务逻辑
 │   ├── EndfieldPuzzleSolver.Recognition/   # 图像识别模块
 │   └── EndfieldPuzzleSolver.Algorithm/     # 求解算法 (F#)
 ├── HeChu-docs/                              # 需求文档
 ├── .github/workflows/                       # GitHub Actions
+├── Dockerfile                               # Docker 镜像配置
 └── scripts/                                 # 构建脚本
 ```
 
