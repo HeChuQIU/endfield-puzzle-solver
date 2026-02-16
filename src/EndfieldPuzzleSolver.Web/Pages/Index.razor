@@ -1,55 +1,49 @@
 @page "/"
-@using EndfieldPuzzleSolver.Core.ViewModels
-@using EndfieldPuzzleSolver.Recognition.Models
+@inject PuzzleApiClient Api
 @inject IJSRuntime JS
+@inject IToastService Toast
+@inject NavigationManager Nav
 @implements IDisposable
 
-<div class="toolbar">
-    <span class="toolbar-title">终末地源石电路解谜器</span>
-    <div class="toolbar-actions">
-        <button class="btn" @onclick="OpenFileDialog">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/>
-            </svg>
+<div class="page-root">
+
+    @* ─── 工具栏 ─── *@
+    <FluentToolbar Style="padding:8px 16px;background-color:#ffffff;border-bottom:1px solid #e1dfdd;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+        <FluentLabel Typo="Typography.H5" Weight="FontWeight.Bold" Style="margin-right:auto;color:#323130;">终末地源石电路解谜器</FluentLabel>
+        <FluentButton Appearance="Appearance.Accent" OnClick="OpenFileDialog"
+                      IconStart="@(new Icons.Regular.Size16.FolderOpen())">
             打开截图
-        </button>
-        <button class="btn" @onclick="PasteFromClipboard">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="5" y="4" width="14" height="16" rx="2"/>
-                <path d="M9 2h6v3H9z"/>
-            </svg>
+        </FluentButton>
+        <FluentButton OnClick="PasteFromClipboard"
+                      IconStart="@(new Icons.Regular.Size16.ClipboardPaste())">
             粘贴截图
-        </button>
+        </FluentButton>
         <InputFile id="fileInput" class="file-input-hidden" OnChange="OnFileSelected" accept=".png,.jpg,.jpeg" />
-    </div>
-</div>
+    </FluentToolbar>
 
-<div class="main-content">
-    @* Left: Board area *@
-    <div class="board-area">
-        <div class="card">
-            <h3 class="card-title">谜题主体</h3>
-            <div class="board-container"
-                 @ondragover="OnDragOver"
-                 @ondragover:preventDefault
-                 @ondrop="OnDrop"
-                 @ondrop:preventDefault>
+    <div class="main-content">
+        @* ─── 左侧: 棋盘区 ─── *@
+        <div class="board-area">
+            <div class="board-container" @ref="_boardContainer">
 
-                @if (_viewModel.IsLoading)
+                @if (_isLoading)
                 {
                     <div class="loading-overlay">
-                        <div class="spinner"></div>
+                        <FluentProgressRing />
+                        <FluentLabel Style="margin-top:16px;">正在处理...</FluentLabel>
                     </div>
                 }
 
-                @if (!_viewModel.HasPuzzle)
+                @if (_puzzle == null)
                 {
                     <div class="board-placeholder">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M19 20H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/>
-                        </svg>
-                        <p>拖入截图以加载谜题</p>
-                        <p style="font-size:13px;">或使用顶部工具栏打开/粘贴截图</p>
+                        <FluentIcon Value="@(new Icons.Regular.Size48.Image())" />
+                        <FluentLabel Typo="Typography.H4">加载谜题</FluentLabel>
+                        <FluentLabel Typo="Typography.Body">
+                            拖入截图，或使用顶部工具栏打开/粘贴
+                            <br />
+                            也可点击右侧示例快速体验
+                        </FluentLabel>
                     </div>
                 }
                 else
@@ -58,91 +52,175 @@
                 }
             </div>
         </div>
-    </div>
 
-    @* Right: Info panel *@
-    <div class="info-panel">
-        @* Puzzle info card *@
-        <div class="card">
-            <h3 class="card-title">谜题信息</h3>
-            @if (_viewModel.HasPuzzle && _viewModel.PuzzleData != null)
-            {
-                <p>网格大小: @_viewModel.PuzzleData.Rows × @_viewModel.PuzzleData.Cols</p>
-                <p style="font-weight:600;margin:12px 0 4px;">颜色组:</p>
-                @foreach (var cg in _viewModel.PuzzleData.ColorGroups)
-                {
-                    <div class="color-group-item">
-                        <span class="color-swatch" style="background:@HsvToCss(cg.Hue, cg.Saturation, cg.Value)"></span>
-                        <span>@cg.Label (H@(cg.Hue) S@(cg.Saturation) V@(cg.Value))</span>
-                    </div>
-                }
-            }
-            else
-            {
-                <p>请打开截图或拖入图片加载谜题</p>
-            }
-        </div>
-
-        @* Components card *@
-        <div class="card">
-            <h3 class="card-title">元件列表</h3>
-            @if (_viewModel.HasPuzzle && _viewModel.PuzzleData != null)
-            {
-                @for (int i = 0; i < _viewModel.PuzzleData.Components.Length; i++)
-                {
-                    var comp = _viewModel.PuzzleData.Components[i];
-                    var color = GetColorGroupCss(_viewModel.PuzzleData, comp.ColorGroup);
-                    <div class="component-item">
-                        <div class="component-label" style="color:@color">
-                            元件 @(i + 1): @comp.ColorGroup (@comp.TileCount 格)
-                        </div>
-                        @RenderComponentShape(comp, color)
-                    </div>
-                }
-            }
-        </div>
-
-        @* Step navigation card *@
-        @if (_viewModel.HasSolution)
-        {
-            <div class="card">
-                <h3 class="card-title">步骤导航</h3>
-                <div class="step-nav">
-                    <button class="btn" disabled="@(!_viewModel.CanGoPrevious)" @onclick="GoToPreviousStep">上一步</button>
-                    <span>@_viewModel.StepNavigationText</span>
-                    <button class="btn" disabled="@(!_viewModel.CanGoNext)" @onclick="GoToNextStep">下一步</button>
+        @* ─── 右侧: 信息面板 ─── *@
+        <div class="info-panel">
+            @* 谜题信息 *@
+            <FluentCard>
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <FluentIcon Value="@(new Icons.Regular.Size24.Info())" Color="Color.Neutral" Style="margin-right:8px;" />
+                    <FluentLabel Weight="FontWeight.Bold">基本信息</FluentLabel>
                 </div>
-            </div>
-        }
-    </div>
-</div>
+                
+                @if (_puzzle != null)
+                {
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+                        <div>
+                            <FluentLabel Typo="Typography.Body" Style="font-size: 0.85em; color: var(--neutral-foreground-hint);">网格尺寸</FluentLabel>
+                            <FluentLabel Weight="FontWeight.Bold">@_puzzle.Rows × @_puzzle.Cols</FluentLabel>
+                        </div>
+                        <div>
+                            <FluentLabel Typo="Typography.Body" Style="font-size: 0.85em; color: var(--neutral-foreground-hint);">总格数</FluentLabel>
+                            <FluentLabel Weight="FontWeight.Bold">@(_puzzle.Rows * _puzzle.Cols)</FluentLabel>
+                        </div>
+                    </div>
+                    
+                    <FluentDivider Style="margin:8px 0;" />
+                    <FluentLabel Typo="Typography.Body" Style="font-size: 0.85em; color: var(--neutral-foreground-hint); margin-bottom:4px;">识别颜色组</FluentLabel>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                        @foreach (var cg in _puzzle.ColorGroups)
+                        {
+                            <div class="color-group-item" title="H:@cg.Hue S:@cg.Saturation V:@cg.Value">
+                                <span class="color-swatch" style="background:@HsvToCss(cg.Hue, cg.Saturation, cg.Value);border:none;box-shadow:0 1px 3px rgba(0,0,0,0.2);"></span>
+                                <FluentLabel Typo="Typography.Body">@cg.Label</FluentLabel>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <FluentLabel Typo="Typography.Body" Color="Color.Neutral">暂无数据</FluentLabel>
+                }
+            </FluentCard>
 
-@* Status bar *@
-<div class="status-bar">
-    <div class="status-icon">ℹ</div>
-    <span>@_viewModel.StatusMessage</span>
+            @* 元件列表 *@
+            <FluentCard>
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <FluentIcon Value="@(new Icons.Regular.Size24.Grid())" Color="Color.Neutral" Style="margin-right:8px;" />
+                    <FluentLabel Weight="FontWeight.Bold">可用元件</FluentLabel>
+                </div>
+
+                @if (_puzzle != null)
+                {
+                    <div class="component-list">
+                        @for (int i = 0; i < _puzzle.Components.Length; i++)
+                        {
+                            var comp = _puzzle.Components[i];
+                            var color = GetColorGroupCss(_puzzle, comp.ColorGroup);
+                            <div class="component-item">
+                                <div class="component-label" style="@($"color:{color};border-bottom:2px solid {color};padding-bottom:2px;margin-bottom:6px;")">
+                                    元件 @(i + 1) (@comp.TileCount)
+                                </div>
+                                @RenderComponentShape(comp, color)
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                     <FluentLabel Typo="Typography.Body" Color="Color.Neutral">加载谜题以查看</FluentLabel>
+                }
+            </FluentCard>
+
+            @* 示例图片 *@
+            <FluentCard>
+                <div style="display:flex;align-items:center;margin-bottom:12px;">
+                    <FluentIcon Value="@(new Icons.Regular.Size24.ImageCopy())" Color="Color.Neutral" Style="margin-right:8px;" />
+                    <FluentLabel Weight="FontWeight.Bold">示例库</FluentLabel>
+                </div>
+                
+                <div class="sample-grid">
+                    <div class="sample-image-container" @onclick="@(() => LoadSampleImage(0))">
+                        <img src="samples/puzzle0.png" alt="简单示例" />
+                        <div class="sample-overlay">示例 1 (5x5)</div>
+                    </div>
+                    <div class="sample-image-container" @onclick="@(() => LoadSampleImage(1))">
+                        <img src="samples/puzzle1.png" alt="复杂示例" />
+                        <div class="sample-overlay">示例 2 (6x6)</div>
+                    </div>
+                </div>
+            </FluentCard>
+        </div>
+    </div>
+
+    @* ─── 状态栏 ─── *@
+    <FluentToolbar Style="padding:4px 16px;background-color:#f8f8f8;border-top:1px solid #e1dfdd;font-size:12px;">
+        <FluentIcon Value="@(new Icons.Regular.Size16.Info())" Color="Color.Accent" Style="margin-right:8px;" />
+        <FluentLabel Style="font-size:12px;">@_statusMessage</FluentLabel>
+    </FluentToolbar>
 </div>
 
 @code {
-    private readonly MainViewModel _viewModel = new();
+    private PuzzleDataDto? _puzzle;
+    private SolveResultDto? _solution;
+    private bool _isLoading;
+    private string _statusMessage = "就绪";
+    private ElementReference _boardContainer;
+    private DotNetObjectReference<Index>? _dotNetHelper;
+
     private const double TileSize = 36;
     private const double RequirementMargin = 24;
     private const double ShapeCellSize = 14;
 
-    protected override void OnInitialized()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        _viewModel.BoardSnapshotChanged += OnBoardChanged;
-        _viewModel.PropertyChanged += OnPropertyChanged;
+        if (firstRender)
+        {
+            _dotNetHelper = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("blazorInterop.setupDropZone", _boardContainer, _dotNetHelper);
+        }
     }
 
-    private void OnBoardChanged(object? sender, EventArgs e)
+    [JSInvokable]
+    public async Task OnDropFile(byte[] bytes, string fileName)
     {
-        InvokeAsync(StateHasChanged);
+        _isLoading = true;
+        _statusMessage = "正在上传并识别...";
+        StateHasChanged();
+
+        try
+        {
+            using var stream = new MemoryStream(bytes);
+            var result = await Api.DetectAndSolveAsync(stream, fileName);
+
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? "识别并求解成功" : (_solution?.Message ?? "无解");
+                Toast.ShowSuccess("图片识别成功");
+            }
+            else
+            {
+                _puzzle = null;
+                _solution = null;
+                _statusMessage = $"识别失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
+        }
+        catch (Exception ex)
+        {
+            _statusMessage = $"拖拽失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
     }
 
-    private void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    [JSInvokable]
+    public void OnDropError(string message)
     {
-        InvokeAsync(StateHasChanged);
+        _statusMessage = message;
+        Toast.ShowWarning(message);
+        StateHasChanged();
     }
 
     private async Task OpenFileDialog()
@@ -158,41 +236,50 @@
         var ext = Path.GetExtension(file.Name).ToLowerInvariant();
         if (ext is not (".png" or ".jpg" or ".jpeg")) return;
 
-        _viewModel.IsLoading = true;
-        _viewModel.StatusMessage = "正在读取图片...";
+        _isLoading = true;
+        _statusMessage = "正在上传并识别...";
         StateHasChanged();
 
         try
         {
-            var tempDir = Path.GetTempPath();
-            var tempPath = Path.Combine(tempDir, $"endfield_upload_{DateTime.Now:yyyyMMddHHmmss}{ext}");
-            await using (var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024))
-            await using (var fs = File.Create(tempPath))
-            {
-                await stream.CopyToAsync(fs);
-            }
+            using var stream = file.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
+            var result = await Api.DetectAndSolveAsync(stream, file.Name);
 
-            await _viewModel.LoadFromScreenshotAsync(tempPath);
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? "识别并求解成功" : (_solution?.Message ?? "无解");
+            }
+            else
+            {
+                _puzzle = null;
+                _solution = null;
+                _statusMessage = $"识别失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
         }
-        catch (DllNotFoundException)
+        catch (HttpRequestException)
         {
-            _viewModel.StatusMessage = "浏览器环境不支持图像识别（需要 OpenCV 本地库），请使用桌面版本";
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
         }
         catch (Exception ex)
         {
-            _viewModel.StatusMessage = $"加载失败: {ex.Message}";
+            _statusMessage = $"加载失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
         }
         finally
         {
-            _viewModel.IsLoading = false;
+            _isLoading = false;
             StateHasChanged();
         }
     }
 
     private async Task PasteFromClipboard()
     {
-        _viewModel.IsLoading = true;
-        _viewModel.StatusMessage = "正在从剪贴板读取图片...";
+        _isLoading = true;
+        _statusMessage = "正在从剪贴板读取图片...";
         StateHasChanged();
 
         try
@@ -200,60 +287,108 @@
             var imageBytes = await JS.InvokeAsync<byte[]?>("blazorInterop.getClipboardImage");
             if (imageBytes == null || imageBytes.Length == 0)
             {
-                _viewModel.StatusMessage = "剪贴板中没有图片";
+                _statusMessage = "剪贴板中没有图片";
+                Toast.ShowWarning("剪贴板中没有图片");
                 return;
             }
 
-            var tempDir = Path.GetTempPath();
-            var tempPath = Path.Combine(tempDir, $"endfield_clipboard_{DateTime.Now:yyyyMMddHHmmss}.png");
-            await File.WriteAllBytesAsync(tempPath, imageBytes);
-            await _viewModel.LoadFromScreenshotAsync(tempPath);
+            _statusMessage = "正在上传并识别...";
+            StateHasChanged();
+
+            using var stream = new MemoryStream(imageBytes);
+            var result = await Api.DetectAndSolveAsync(stream, "clipboard.png");
+
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? "识别并求解成功" : (_solution?.Message ?? "无解");
+            }
+            else
+            {
+                _puzzle = null;
+                _solution = null;
+                _statusMessage = $"识别失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
         }
-        catch (DllNotFoundException)
+        catch (HttpRequestException)
         {
-            _viewModel.StatusMessage = "浏览器环境不支持图像识别（需要 OpenCV 本地库），请使用桌面版本";
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
         }
         catch (Exception ex)
         {
-            _viewModel.StatusMessage = $"粘贴失败: {ex.Message}";
+            _statusMessage = $"粘贴失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
         }
         finally
         {
-            _viewModel.IsLoading = false;
+            _isLoading = false;
             StateHasChanged();
         }
     }
 
-    private void OnDragOver()
+    private async Task LoadSampleImage(int index)
     {
-        // Handled via preventDefault in markup
+        _isLoading = true;
+        _statusMessage = $"正在识别示例谜题 {index + 1}...";
+        StateHasChanged();
+
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(Nav.BaseUri) };
+            var imageBytes = await http.GetByteArrayAsync($"samples/puzzle{index}.png");
+            
+            using var stream = new MemoryStream(imageBytes);
+            var result = await Api.DetectAndSolveAsync(stream, $"puzzle{index}.png");
+
+            if (result.IsSuccess)
+            {
+                _puzzle = result.Puzzle;
+                _solution = result.Solution;
+                _statusMessage = _solution is { IsSolved: true } ? $"示例 {index + 1} 识别成功" : (_solution?.Message ?? "无解");
+            }
+            else
+            {
+                _statusMessage = $"识别示例失败: {result.Error}";
+                Toast.ShowError(result.Error ?? "识别失败");
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _statusMessage = "无法连接到后端服务，请检查 API 地址配置";
+            Toast.ShowError("无法连接到后端服务");
+        }
+        catch (Exception ex)
+        {
+            _statusMessage = $"加载示例失败: {ex.Message}";
+            Toast.ShowError(ex.Message);
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
     }
 
-    private void OnDrop()
+    private TileInfoDto[,]? GetFinalBoardState()
     {
-        // Blazor WASM drag-and-drop for files requires JS interop;
-        // simplified: user should use file input instead
-        _viewModel.StatusMessage = "请使用顶部工具栏的\"打开截图\"按钮选择文件";
+        if (_puzzle == null) return null;
+        if (_solution is not { IsSolved: true } sol || sol.Steps.Count == 0)
+            return _puzzle.Tiles;
+        return sol.Steps[^1].BoardSnapshot;
     }
 
-    private void GoToPreviousStep()
-    {
-        _viewModel.GoToPreviousStep();
-    }
-
-    private void GoToNextStep()
-    {
-        _viewModel.GoToNextStep();
-    }
+    // ──────────── 渲染逻辑 ────────────
 
     private RenderFragment RenderBoard() => builder =>
     {
-        var snapshot = _viewModel.GetCurrentBoardSnapshot();
-        var puzzle = _viewModel.PuzzleData;
-        if (snapshot == null || puzzle == null) return;
+        var snapshot = GetFinalBoardState();
+        if (snapshot == null || _puzzle == null) return;
 
-        int rows = puzzle.Rows;
-        int cols = puzzle.Cols;
+        int rows = _puzzle.Rows;
+        int cols = _puzzle.Cols;
         double gridW = cols * TileSize + 2 * RequirementMargin;
         double gridH = rows * TileSize + 2 * RequirementMargin;
 
@@ -263,16 +398,16 @@
         builder.AddAttribute(3, "height", gridH.ToString("F0"));
         builder.AddAttribute(4, "viewBox", $"0 0 {gridW:F0} {gridH:F0}");
 
-        // Row requirements (left side)
+        // Row requirements
         for (int r = 0; r < rows; r++)
         {
-            var reqs = puzzle.RowRequirements[r];
+            var reqs = _puzzle.RowRequirements[r];
             double y = RequirementMargin + r * TileSize + TileSize / 2;
             double x = RequirementMargin / 2;
             foreach (var req in reqs)
             {
                 int currentFilled = CountColorInRow(snapshot, r, req.ColorGroup);
-                var color = GetColorGroupCss(puzzle, req.ColorGroup);
+                var color = GetColorGroupCss(_puzzle, req.ColorGroup);
                 builder.OpenElement(10, "text");
                 builder.AddAttribute(11, "x", (x - 14).ToString("F1"));
                 builder.AddAttribute(12, "y", (y + 4).ToString("F1"));
@@ -285,16 +420,16 @@
             }
         }
 
-        // Column requirements (top)
+        // Column requirements
         for (int c = 0; c < cols; c++)
         {
-            var reqs = puzzle.ColumnRequirements[c];
+            var reqs = _puzzle.ColumnRequirements[c];
             double x = RequirementMargin + c * TileSize + TileSize / 2;
             double y = RequirementMargin / 2;
             foreach (var req in reqs)
             {
                 int currentFilled = CountColorInCol(snapshot, c, req.ColorGroup);
-                var color = GetColorGroupCss(puzzle, req.ColorGroup);
+                var color = GetColorGroupCss(_puzzle, req.ColorGroup);
                 builder.OpenElement(20, "text");
                 builder.AddAttribute(21, "x", x.ToString("F1"));
                 builder.AddAttribute(22, "y", (y + 4).ToString("F1"));
@@ -307,7 +442,7 @@
             }
         }
 
-        // Pass 1: Draw tile fills
+        // Pass 1: tile fills
         for (int r = 0; r < rows; r++)
         {
             for (int c = 0; c < cols; c++)
@@ -319,7 +454,7 @@
                 string? fill = tile.Type switch
                 {
                     TileType.Disabled => "#696969",
-                    TileType.Lock when tile.ColorGroup != null => GetColorGroupCss(puzzle, tile.ColorGroup),
+                    TileType.Lock when tile.ColorGroup != null => GetColorGroupCss(_puzzle, tile.ColorGroup),
                     _ => null
                 };
 
@@ -334,7 +469,6 @@
                     builder.CloseElement();
                 }
 
-                // Icon overlays
                 if (tile.Type == TileType.Disabled)
                 {
                     builder.OpenElement(40, "text");
@@ -359,7 +493,7 @@
             }
         }
 
-        // Pass 2: Draw borders
+        // Pass 2: borders
         for (int r = 0; r < rows; r++)
         {
             for (int c = 0; c < cols; c++)
@@ -375,19 +509,12 @@
                     _ => "#000000"
                 };
 
-                // Top border
                 if (r == 0 || !IsSameComponent(tile, snapshot[r - 1, c]))
                     AddSvgLine(builder, left, top, left + TileSize, top, stroke);
-
-                // Left border
                 if (c == 0 || !IsSameComponent(tile, snapshot[r, c - 1]))
                     AddSvgLine(builder, left, top, left, top + TileSize, stroke);
-
-                // Bottom border
                 if (r == rows - 1 || !IsSameComponent(tile, snapshot[r + 1, c]))
                     AddSvgLine(builder, left, top + TileSize, left + TileSize, top + TileSize, stroke);
-
-                // Right border
                 if (c == cols - 1 || !IsSameComponent(tile, snapshot[r, c + 1]))
                     AddSvgLine(builder, left + TileSize, top, left + TileSize, top + TileSize, stroke);
             }
@@ -408,7 +535,7 @@
         builder.CloseElement();
     }
 
-    private RenderFragment RenderComponentShape(ComponentInfo comp, string color) => builder =>
+    private RenderFragment RenderComponentShape(ComponentInfoDto comp, string color) => builder =>
     {
         double w = comp.Cols * ShapeCellSize;
         double h = comp.Rows * ShapeCellSize;
@@ -437,44 +564,36 @@
             }
         }
 
-        builder.CloseElement(); // svg
+        builder.CloseElement();
     };
 
-    private static bool IsSameComponent(TileInfo a, TileInfo b)
+    // ──────────── 辅助方法 ────────────
+
+    private static bool IsSameComponent(TileInfoDto a, TileInfoDto b)
         => a.PlacedComponentIndex >= 0 && a.PlacedComponentIndex == b.PlacedComponentIndex;
 
-    private static int CountColorInRow(TileInfo[,] board, int row, string colorGroup)
+    private static int CountColorInRow(TileInfoDto[,] board, int row, string colorGroup)
     {
         int count = 0;
         int cols = board.GetLength(1);
         for (int c = 0; c < cols; c++)
-        {
-            var tile = board[row, c];
-            if (tile.Type == TileType.Lock && tile.ColorGroup == colorGroup)
-                count++;
-        }
+            if (board[row, c].Type == TileType.Lock && board[row, c].ColorGroup == colorGroup) count++;
         return count;
     }
 
-    private static int CountColorInCol(TileInfo[,] board, int col, string colorGroup)
+    private static int CountColorInCol(TileInfoDto[,] board, int col, string colorGroup)
     {
         int count = 0;
         int rows = board.GetLength(0);
         for (int r = 0; r < rows; r++)
-        {
-            var tile = board[r, col];
-            if (tile.Type == TileType.Lock && tile.ColorGroup == colorGroup)
-                count++;
-        }
+            if (board[r, col].Type == TileType.Lock && board[r, col].ColorGroup == colorGroup) count++;
         return count;
     }
 
-    private static string GetColorGroupCss(PuzzleData puzzle, string colorGroup)
+    private static string GetColorGroupCss(PuzzleDataDto puzzle, string colorGroup)
     {
         var cg = puzzle.ColorGroups.FirstOrDefault(x => x.Label == colorGroup);
-        if (cg != null)
-            return HsvToCss(cg.Hue, cg.Saturation, cg.Value);
-        return "#808080";
+        return cg != null ? HsvToCss(cg.Hue, cg.Saturation, cg.Value) : "#808080";
     }
 
     private static string HsvToCss(int h, int s, int v)
@@ -488,11 +607,9 @@
         double hDeg = Math.Clamp(h * 2.0, 0, 360);
         double sNorm = Math.Clamp(s / 255.0, 0, 1);
         double vNorm = Math.Clamp(v / 255.0, 0, 1);
-
         double c = vNorm * sNorm;
         double x = c * (1 - Math.Abs((hDeg / 60.0) % 2 - 1));
         double m = vNorm - c;
-
         double r1, g1, b1;
         if (hDeg < 60) { r1 = c; g1 = x; b1 = 0; }
         else if (hDeg < 120) { r1 = x; g1 = c; b1 = 0; }
@@ -500,17 +617,11 @@
         else if (hDeg < 240) { r1 = 0; g1 = x; b1 = c; }
         else if (hDeg < 300) { r1 = x; g1 = 0; b1 = c; }
         else { r1 = c; g1 = 0; b1 = x; }
-
-        return (
-            (byte)((r1 + m) * 255),
-            (byte)((g1 + m) * 255),
-            (byte)((b1 + m) * 255)
-        );
+        return ((byte)((r1 + m) * 255), (byte)((g1 + m) * 255), (byte)((b1 + m) * 255));
     }
 
     public void Dispose()
     {
-        _viewModel.BoardSnapshotChanged -= OnBoardChanged;
-        _viewModel.PropertyChanged -= OnPropertyChanged;
+        _dotNetHelper?.Dispose();
     }
 }

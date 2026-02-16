@@ -4,6 +4,20 @@
 
 ---
 
+## REQ-024: Web 拖拽功能修复 - 支持图片拖入
+
+- [2026-02-16] 创建需求
+- [2026-02-16] 完成开发：修复 Blazor WebAssembly 拖拽功能，添加 JavaScript 互操作 setupDropZone，使用原生 DOM API 处理拖拽事件并读取文件；实现 [JSInvokable] 方法 OnDropFile 处理拖入的图片字节流；支持文件类型验证、错误处理、Toast 提示；编译通过 0 错误 0 警告
+
+---
+
+## REQ-023: Web UI 视觉优化 - 现代化界面设计
+
+- [2026-02-16] 创建需求
+- [2026-02-16] 完成开发：重构 CSS 样式为现代化 Dashboard 布局（Grid: 1fr + 340px 侧边栏），优化色彩方案（#f0f2f5 背景 + Azure Blue 主题色），增强视觉层次（阴影、圆角、悬停效果）；更新 Razor 组件使用 FluentUI Size24 图标，修复 Typography.Caption 和 FontWeight.SemiBold 不兼容问题；优化颜色组、元件列表、示例库的展示效果；编译通过 0 错误 0 警告
+
+---
+
 ## 发布配置 - GitHub Actions 自动化发布流程
 
 - [2026-02-14] 创建 GitHub Actions workflow 用于自动发布 Avalonia 版本
