@@ -7,7 +7,7 @@
 ## REQ-026: 修复 Web 前端服务配置缺失
 
 - [2026-02-16] 创建需求
-- [2026-02-16] 完成开发：修复 Program.cs 缺少服务配置的问题，添加 AppSettings 配置读取、HttpClient BaseAddress 配置（指向后端 API http://139.159.220.241:52000/）、PuzzleApiClient 服务注册、FluentUI 服务注册；解决前端无法连接后端的问题；编译通过 0 错误 2 警告（AOT 兼容性警告不影响功能）
+- [2026-02-16] 完成开发：修复 Program.cs 缺少服务配置的问题，添加 AppSettings 配置读取、HttpClient BaseAddress 配置、PuzzleApiClient 服务注册、FluentUI 服务注册；解决前端无法连接后端的问题；编译通过 0 错误 2 警告（AOT 兼容性警告不影响功能）
 
 ---
 
